@@ -353,14 +353,16 @@ class App:
         return best
 
     @staticmethod
-    def _running_in_subtree(node: dict) -> Optional[dict]:
-        stack = [node]
+    def _running_in_subtree(node: dict, app: Optional[dict] = None) -> Optional[dict]:
+        """The app of the first in-use node at/below ``node`` (inherited from the nearest node that has
+        one, starting from ``app``; ``{}`` if none has), or None if nothing in the subtree is in use."""
+        stack = [(node, app)]
         while stack:
-            n = stack.pop()
-            a = n.get("app")
+            n, inherited = stack.pop()
+            a = n.get("app") or inherited
             if n.get("in_use"):
                 return a or {}
-            stack.extend(n.get("children") or [])
+            stack.extend((c, a) for c in n.get("children") or [])
         return None
 
     def _remove_from_tree(self, path: str, size: int, files: int) -> None:
@@ -494,8 +496,8 @@ class App:
                         raise ApiError(HTTPStatus.CONFLICT, "belongs to %s, which is running — quit it first"
                                        % ((a.get("app") or app or {}).get("name") or "an app"))
                 if node is not None:
-                    sub = self._running_in_subtree(node)
-                    if sub:
+                    sub = self._running_in_subtree(node, app)
+                    if sub is not None:
                         raise ApiError(HTTPStatus.CONFLICT, "contains data of %s, which is running — quit it first"
                                        % (sub.get("name") or "a running app"))
                     safety = node.get("safety")

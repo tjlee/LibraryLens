@@ -345,6 +345,18 @@ class ServerTest(unittest.TestCase):
         self.assertIn("running", j["error"])
         self.assertEqual(self.stubs.trashed, [])
 
+    def test_trash_running_descendant_with_inherited_app_refused(self):
+        # the running node has no "app" of its own; that must not read as "nothing is running"
+        self.find(H + "/IdeaProjects/ultimate/out", "Home")["in_use"] = True
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate", "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("contains data of a running app", j["error"])
+        self.find(H + "/IdeaProjects", "Home")["app"] = JB_RUN
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate", "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("contains data of IntelliJ IDEA", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
     def test_trash_danger_requires_force(self):
         p = L + "/Caches/Danger"
         status, j = self.jreq("POST", "/api/trash", {"path": p})
