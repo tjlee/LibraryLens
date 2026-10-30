@@ -43,6 +43,25 @@ def _fold(p: str) -> str:
     return unicodedata.normalize("NFD", p).casefold()
 
 
+def _is_git_dir(p: str) -> bool:
+    """A ``.git`` dir or a bare repository (git's own test: HEAD, objects/ and refs/)."""
+    return (os.path.isfile(os.path.join(p, "HEAD")) and os.path.isdir(os.path.join(p, "objects"))
+            and os.path.isdir(os.path.join(p, "refs")))
+
+
+def _inside_git_dir(target: str) -> bool:
+    """Is ``target`` a git dir or inside one? Checked on disk, so bare repos deeper than the scan
+    depth (no '.git' in the path, no git_dir node in the tree) are caught too."""
+    p = target if os.path.isdir(target) and not os.path.islink(target) else os.path.dirname(target)
+    while True:
+        if _is_git_dir(p):
+            return True
+        parent = os.path.dirname(p)
+        if parent == p:
+            return False
+        p = parent
+
+
 def _is_strictly_inside(child: str, parent: str) -> bool:
     if child == parent:
         return False
@@ -76,7 +95,8 @@ def validate(path: str, allowed_roots: list) -> tuple:
     target = os.path.join(os.path.realpath(os.path.dirname(path)), base)
     if not os.path.lexists(target):
         return None, "path does not exist"
-    if ".git" in _fold(path).split("/") or ".git" in _fold(target).split("/"):
+    if (".git" in _fold(path).split("/") or ".git" in _fold(target).split("/")
+            or _inside_git_dir(target)):
         # Trashing git internals (a .git dir, its packs) breaks the repo and frees nothing until the
         # Trash is emptied; LibraryLens offers dedicated git cleanup actions instead.
         return None, "refusing to trash a .git folder or its contents; use the git cleanup actions"

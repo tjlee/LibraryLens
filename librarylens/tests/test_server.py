@@ -689,6 +689,18 @@ class ServerTest(unittest.TestCase):
             self.assertIn("git cleanup actions", j["error"])
         self.assertEqual(self.stubs.trashed, [])
 
+    def test_trash_inside_bare_repo_below_tree_refused(self):
+        # a bare repo deeper than the tree: no '.git' component, no git_dir node, only a special entry
+        bare = H + "/IdeaProjects/mirrors/a/mirror.git"
+        pack = bare + "/objects/pack/pack-x.pack"
+        self.app.result["special"].append({"path": bare, "kind": "git_dir", "size": 1200, "files": 3,
+                                           "mtime": 1.0, "root": "Home"})
+        self.app.result["big_files"].append({"path": pack, "size": 1200, "mtime": 1.0, "root": "Home"})
+        status, j = self.jreq("POST", "/api/trash", {"path": pack, "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("git cleanup actions", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
     def test_trash_big_file_not_in_tree(self):
         p = L + "/Caches/com.example.tool/huge.bin"
         status, j = self.jreq("POST", "/api/trash", {"path": p})

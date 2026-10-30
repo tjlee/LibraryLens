@@ -129,6 +129,22 @@ class TrashTest(unittest.TestCase):
             self.assertIn("git cleanup actions", res["error"])
         self.assertTrue(os.path.exists(tmp))
 
+    def test_rejects_bare_repo_internals(self) -> None:
+        # a bare repo: no '.git' component anywhere in the path
+        repo = os.path.join(self.root, "mirror-" + self.tag)
+        os.makedirs(os.path.join(repo, "objects", "pack"))
+        os.makedirs(os.path.join(repo, "refs"))
+        with open(os.path.join(repo, "HEAD"), "w") as f:
+            f.write("ref: refs/heads/main\n")
+        pack = os.path.join(repo, "objects", "pack", "pack-%s.pack" % self.tag)
+        open(pack, "w").close()
+        for p in (repo, os.path.join(repo, "objects"), pack):
+            target, err = trash.validate(p, [self.root])
+            self.assertIsNone(target, p)
+            self.assertIn("git cleanup actions", err)
+        target, err = trash.validate(self._make_item(), [self.root])
+        self.assertIsNone(err)
+
     @unittest.skipUnless(os.path.isdir(os.path.join(HOME, "LIBRARY")), "case-sensitive filesystem")
     def test_rejects_case_variants(self) -> None:
         # validate() only: with a broken guard, move_to_trash would really trash ~/Library
