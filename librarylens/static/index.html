@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>LibraryLens</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel2: #f0f2f5; --text: #1d1f23; --muted: #5d6470; --faint: #8a919c;
+  --border: #dde1e7; --accent: #2f6fe4; --accent-text: #ffffff; --hover: #eef3fd; --sel: #dfe9fc;
+  --bar: #c9d6ee; --bar2: #2f6fe4;
+  --safe: #1f8a4c; --safe-bg: #dff3e6; --caution: #9a6200; --caution-bg: #fdf0d2; --danger: #c0262d; --danger-bg: #fbe1e1;
+  --tm-safe: #4fae73; --tm-caution: #e0a83a; --tm-danger: #d9534f; --tm-none: #9aa6b8; --tm-syn: #c3c9d2;
+  --f-orphaned: #8e44ad; --f-old_version: #2f6fe4; --f-stale: #a0522d; --f-regenerable: #11808a;
+  /* disk segments: categorical slots in validated adjacent order, neutrals for system/other/unaccounted/free */
+  --s-volumes: #6b7280; --s-library: #2a78d6; --s-home: #eb6834; --s-vm: #1baf7a; --s-personal: #eda100;
+  --s-dev: #e87ba4; --s-docker: #008300; --s-apps: #6250d6; --s-other: #a3a9b3; --s-unacc: #c0c4cb; --s-free: #e9ecf0;
+  --s-hatch: rgba(0,0,0,.13);
+  --shadow: 0 10px 30px rgba(20,30,50,.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b; --panel: #1d2026; --panel2: #252931; --text: #e7e9ed; --muted: #a4abb7; --faint: #79808c;
+    --border: #323741; --accent: #5b92f5; --accent-text: #0b1220; --hover: #252c3a; --sel: #2a3550;
+    --bar: #34405a; --bar2: #5b92f5;
+    --safe: #5fd08c; --safe-bg: #18372a; --caution: #f3c15a; --caution-bg: #3d3115; --danger: #ff7b78; --danger-bg: #432021;
+    --tm-safe: #2f8a55; --tm-caution: #b9862a; --tm-danger: #b4423f; --tm-none: #59627a; --tm-syn: #3f4552;
+    --f-orphaned: #b67ad1; --f-old_version: #6c9ef7; --f-stale: #d08a5e; --f-regenerable: #3fb9c2;
+    --s-volumes: #8b93a1; --s-library: #3987e5; --s-home: #d95926; --s-vm: #199e70; --s-personal: #c98500;
+    --s-dev: #d55181; --s-docker: #008300; --s-apps: #9085e9; --s-other: #5f6672; --s-unacc: #4a505b; --s-free: #2b3039;
+    --s-hatch: rgba(255,255,255,.12);
+    --shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 4px 10px; }
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+button.danger { background: var(--danger); color: #fff; border-color: var(--danger); font-weight: 600; }
+button.small { padding: 2px 8px; font-size: 12px; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+button.link:hover:not(:disabled) { background: none; }
+button:focus-visible, input:focus-visible, select:focus-visible, tr:focus-visible, .tm-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input[type=search], input[type=text], select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.muted { color: var(--muted); } .faint { color: var(--faint); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.nowrap { white-space: nowrap; }
+
+header { display: flex; align-items: center; gap: 22px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 16px; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
+.brand .logo { width: 22px; height: 22px; border-radius: 6px; background: conic-gradient(var(--tm-safe) 0 40%, var(--tm-caution) 0 70%, var(--tm-danger) 0 85%, var(--tm-none) 0); }
+.stat { display: flex; flex-direction: column; }
+.stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.stat .val { font-size: 18px; font-weight: 650; }
+.stat .val.green { color: var(--safe); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--border); background: var(--panel2); white-space: nowrap; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+button.chip { cursor: pointer; }
+.chip.job { color: var(--accent); border-color: var(--accent); }
+.spacer { flex: 1; }
+.scaninfo { text-align: right; font-size: 12px; color: var(--muted); }
+#progress { display: none; align-items: center; gap: 10px; padding: 6px 16px; background: var(--panel2); border-bottom: 1px solid var(--border); font-size: 12px; }
+#progress.on { display: flex; }
+#progress .cur { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; direction: rtl; text-align: left; }
+#p-el { font-variant-numeric: tabular-nums; }
+.spin { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.phases { display: flex; gap: 3px; flex: none; }
+.phases i { width: 16px; height: 4px; border-radius: 2px; background: var(--border); display: block; }
+.phases i.done { background: var(--accent); opacity: .55; } .phases i.on { background: var(--accent); }
+#banner { display: none; padding: 8px 16px; background: var(--danger-bg); color: var(--danger); border-bottom: 1px solid var(--border); }
+#banner.on { display: block; }
+
+#layout { flex: 1; display: flex; min-height: 0; }
+aside { width: 270px; flex: none; overflow: auto; background: var(--panel); border-right: 1px solid var(--border); padding: 8px 0 16px; }
+aside h3 { margin: 0; }
+aside h3 button { display: flex; width: 100%; justify-content: space-between; border: 0; border-radius: 0; background: none; margin-top: 8px; padding: 6px 14px 3px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; }
+aside h3 button.active { color: var(--accent); }
+.root-item { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: none; padding: 5px 14px; }
+.root-item.active { background: var(--sel); }
+.root-item .row1 { display: flex; justify-content: space-between; gap: 8px; }
+.root-item .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.root-item .sz { font-variant-numeric: tabular-nums; color: var(--muted); flex: none; }
+.root-item .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 3px; overflow: hidden; }
+.root-item .bar > i { display: block; height: 100%; background: var(--bar2); border-radius: 2px; }
+.root-item.nested { padding-left: 26px; }
+.root-item.nested .nm { font-style: italic; }
+
+main { flex: 1; overflow: auto; padding: 12px 16px 40px; min-width: 0; }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
+.tabs button { border-radius: 999px; }
+.tabs button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.tabs .cnt { opacity: .75; font-size: 11.5px; margin-left: 3px; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; flex: 1; min-width: 200px; font-size: 14px; }
+.crumbs button { border: 0; background: none; padding: 2px 6px; }
+.crumbs .sep { color: var(--faint); }
+.crumbs .here { font-weight: 650; padding: 2px 6px; }
+label.toggle { display: inline-flex; align-items: center; gap: 5px; user-select: none; cursor: pointer; }
+
+#treemap { position: relative; height: 300px; background: var(--panel2); border-radius: 8px; overflow: hidden; margin-bottom: 12px; border: 1px solid var(--border); }
+.tm-cell { position: absolute; overflow: hidden; border: 1px solid var(--panel); border-radius: 3px; padding: 3px 5px; color: #fff; font-size: 11.5px; line-height: 1.25; cursor: default; text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.tm-cell.drill { cursor: pointer; }
+.tm-cell:hover { filter: brightness(1.12); }
+.tm-cell b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-cell span { opacity: .92; white-space: nowrap; }
+.tm-cell.c-safe { background: var(--tm-safe); } .tm-cell.c-caution { background: var(--tm-caution); } .tm-cell.c-danger { background: var(--tm-danger); }
+.tm-cell.c-none { background: var(--tm-none); }
+.tm-cell.c-syn { background: repeating-linear-gradient(45deg, var(--tm-syn) 0 6px, var(--tm-none) 6px 12px); color: var(--text); text-shadow: none; }
+.tm-cell.f-orphaned { background: var(--f-orphaned); } .tm-cell.f-old_version { background: var(--f-old_version); }
+.tm-cell.f-stale { background: var(--f-stale); } .tm-cell.f-regenerable { background: var(--f-regenerable); }
+.tm-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+#tip { position: fixed; z-index: 50; pointer-events: none; display: none; max-width: 380px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 8px 10px; font-size: 12px; }
+#tip .t { font-weight: 650; word-break: break-all; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin: -6px 0 10px; }
+.legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; vertical-align: -1px; }
+
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--panel2); user-select: none; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--text); }
+th .arr { font-size: 10px; margin-left: 3px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+tbody tr.drill { cursor: pointer; }
+tbody tr:hover { background: var(--hover); }
+tbody tr.flash { background: var(--sel); }
+tr.syn td { color: var(--muted); font-style: italic; }
+tr.stub td { color: var(--muted); }
+tr.stub { cursor: pointer; }
+.name { display: flex; flex-direction: column; min-width: 0; max-width: 330px; }
+.name .n1 { display: flex; align-items: center; gap: 6px; font-weight: 550; }
+.name .n1 .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name .reason { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ico { flex: none; width: 16px; text-align: center; }
+.lock { cursor: help; }
+.sizecell { min-width: 110px; }
+.sizebar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: 3px; overflow: hidden; }
+.sizebar > i { display: block; height: 100%; background: var(--bar2); border-radius: 2px; }
+.app { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; max-width: 280px; }
+.app .an { font-weight: 550; }
+.app.inherited .an { font-weight: 400; color: var(--muted); }
+.badge { font-size: 10.5px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border); white-space: nowrap; line-height: 16px; font-weight: 500; }
+.badge.notinst { color: var(--danger); background: var(--danger-bg); border-color: transparent; }
+.badge.old { color: var(--caution); background: var(--caution-bg); border-color: transparent; }
+.badge.run { color: var(--accent); background: var(--sel); border-color: transparent; font-weight: 600; }
+.badge.sys { color: var(--muted); }
+.badge.root { color: var(--muted); background: var(--panel2); }
+.badge.kind { border-color: transparent; color: var(--text); background: var(--panel2); }
+.badge.kind::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 4px; background: var(--kc, var(--faint)); vertical-align: 0; }
+.k-git { --kc: var(--s-home); } .k-build { --kc: var(--s-dev); } .k-vm { --kc: var(--s-vm); } .k-personal { --kc: var(--s-personal); }
+.k-img { --kc: var(--s-apps); } .k-dl { --kc: var(--s-library); } .k-proj { --kc: var(--s-other); }
+.flag { font-size: 11px; padding: 0 7px; border-radius: 999px; color: #fff; white-space: nowrap; line-height: 17px; display: inline-block; margin: 1px 2px 1px 0; }
+.flag.orphaned { background: var(--f-orphaned); } .flag.old_version { background: var(--f-old_version); }
+.flag.stale { background: var(--f-stale); } .flag.regenerable { background: var(--f-regenerable); }
+.pill { font-size: 11.5px; padding: 1px 9px; border-radius: 999px; font-weight: 600; white-space: nowrap; cursor: help; }
+.pill.safe { color: var(--safe); background: var(--safe-bg); } .pill.caution { color: var(--caution); background: var(--caution-bg); } .pill.danger { color: var(--danger); background: var(--danger-bg); }
+.pill.running { color: var(--accent); background: var(--sel); } .pill.done { color: var(--safe); background: var(--safe-bg); } .pill.failed { color: var(--danger); background: var(--danger-bg); }
+.actions { white-space: nowrap; text-align: right; }
+.actions button + button { margin-left: 4px; }
+.actions button.trunc { max-width: 170px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.more { text-align: center; padding: 10px; }
+
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 80px 20px; gap: 14px; }
+.empty h2 { margin: 0; font-size: 22px; }
+.empty button.primary { font-size: 17px; padding: 10px 28px; border-radius: 10px; }
+
+/* disk tab */
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.card h2 .muted { font-weight: 400; font-size: 13px; }
+.card.hl { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+.tile { background: var(--panel2); border-radius: 8px; padding: 9px 12px; }
+.tile .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.tile .val { font-size: 21px; font-weight: 650; margin-top: 1px; }
+.tile .sub { font-size: 11.5px; color: var(--muted); }
+.tile .val.green { color: var(--safe); }
+.dbar { display: flex; gap: 2px; height: 38px; border-radius: 4px; overflow: hidden; background: var(--panel); }
+.seg { flex: 1 1 0px; min-width: 0; border: 0; padding: 0 6px; border-radius: 0; color: #fff; font-size: 11.5px; line-height: 1.15; text-align: left;
+  overflow: hidden; white-space: nowrap; display: flex; flex-direction: column; justify-content: center; background: var(--sc); }
+.seg:first-child { border-radius: 4px 0 0 4px; } .seg:last-child { border-radius: 0 4px 4px 0; }
+.seg:hover:not(:disabled) { filter: brightness(1.1); background: var(--sc); }
+.seg.sel { box-shadow: inset 0 0 0 2px var(--text); }
+.seg b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; } .seg span { opacity: .95; }
+.seg.ink-dark { color: #0b0b0b; }
+.seg.hatch, .sw.hatch { background: repeating-linear-gradient(45deg, var(--sc) 0 5px, var(--s-hatch) 5px 7px), var(--sc); background-color: var(--sc); }
+.seg.free { color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+.seglegend { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 14px; }
+.seglegend button { display: grid; grid-template-columns: 12px 1fr auto 46px; gap: 8px; align-items: center; width: 100%; border: 0; background: none; text-align: left; padding: 3px 6px; border-radius: 5px; }
+.seglegend button.sel { background: var(--sel); }
+.seglegend .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+.seglegend .p { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; background: var(--sc); }
+.sw.free { box-shadow: inset 0 0 0 1px var(--faint); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.grid2 > .card { margin-bottom: 0; }
+.card ul.plain { margin: 6px 0 0; padding-left: 18px; }
+.card ul.plain li { margin: 3px 0; }
+.detail { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.detail h3 { margin: 0 0 6px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; }
+
+/* git & jobs */
+tr.actrow td { padding-top: 0; background: var(--panel); }
+tr.actrow:hover { background: none; }
+.actbtns { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 4px 22px; }
+.actbtn { display: inline-flex; flex-direction: column; align-items: flex-start; text-align: left; padding: 4px 10px; max-width: 360px; }
+.actbtn .al { font-weight: 600; } .actbtn .as { font-size: 11px; color: var(--muted); }
+.actbtn.safe .al::before { content: "● "; color: var(--safe); } .actbtn.caution .al::before { content: "● "; color: var(--caution); }
+.actbtn:disabled { opacity: .6; }
+.blockmsg { font-size: 11px; color: var(--caution); white-space: normal; }
+.jobs { margin-top: 16px; }
+.job { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 8px; overflow: hidden; }
+.job .jh { display: flex; gap: 10px; align-items: center; padding: 7px 10px; flex-wrap: wrap; }
+.job pre { margin: 0; padding: 8px 10px; background: var(--panel2); border-top: 1px solid var(--border); max-height: 240px; overflow: auto; font-size: 11.5px; white-space: pre-wrap; word-break: break-all; }
+
+#modal-bg { position: fixed; inset: 0; background: rgba(10,15,25,.45); display: none; align-items: center; justify-content: center; z-index: 100; }
+#modal-bg.on { display: flex; }
+#modal { background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); width: min(580px, 92vw); max-height: 90vh; overflow: auto; padding: 18px 20px; border: 1px solid var(--border); }
+#modal h2 { margin: 0 0 12px; font-size: 17px; }
+#modal dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 12px; margin: 0 0 14px; }
+#modal dt { color: var(--muted); }
+#modal dd { margin: 0; word-break: break-all; }
+#modal .confirm { display: block; margin: 10px 0; padding: 10px; border-radius: 8px; background: var(--panel2); }
+#modal .confirm.danger { background: var(--danger-bg); color: var(--danger); }
+#modal .confirm.danger input { width: 100%; margin-top: 6px; }
+#modal .err { color: var(--danger); margin: 8px 0; white-space: pre-wrap; }
+#modal .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+#modal .note { font-size: 12px; color: var(--muted); }
+#modal .choice { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 10px; padding: 10px 16px; display: none; z-index: 120; max-width: 90vw; }
+#toast.on { display: block; }
+#toast.bad { color: var(--danger); }
+@media (max-width: 860px) { aside { display: none; } }
+@media (forced-colors: active) { .seg { border: 1px solid CanvasText; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo" aria-hidden="true"></span>LibraryLens</div>
+  <div class="stat"><span class="lbl">Scanned</span><span class="val" id="h-total">—</span></div>
+  <div class="stat"><span class="lbl">Likely reclaimable</span><span class="val green" id="h-rec">—</span></div>
+  <div class="chips" id="h-flags"></div>
+  <div class="spacer"></div>
+  <div class="scaninfo" id="h-scan"></div>
+  <button id="btn-rescan" class="primary" type="button">Rescan all</button>
+</header>
+<div id="progress" role="status" aria-live="polite"><span class="spin"></span><b id="p-phase">Scanning</b><span class="phases" id="p-steps" aria-hidden="true"></span><span class="cur mono" id="p-cur"></span><span id="p-el" class="muted"></span><button type="button" class="small" id="btn-cancel">Cancel</button></div>
+<div id="banner" role="alert"></div>
+<div id="layout">
+  <aside id="sidebar" aria-label="Scanned locations"></aside>
+  <main id="main"></main>
+</div>
+<div id="tip"></div>
+<div id="modal-bg"><div id="modal" role="dialog" aria-modal="true" aria-labelledby="m-title"></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+"use strict";
+const TOKEN = "__LL_TOKEN__";
+const FLAG_ORDER = ["orphaned", "old_version", "stale", "regenerable"];
+const FLAG_LABEL = { orphaned: "Orphaned", old_version: "Old version", stale: "Stale", regenerable: "Regenerable" };
+const FLAG_LABEL_PL = { orphaned: "Orphaned", old_version: "Old versions", stale: "Stale", regenerable: "Regenerable" };
+const SAFETY_RANK = { safe: 0, caution: 1, danger: 2 };
+const GROUPS = [
+  ["Library", ["cache", "app_support", "container", "group_container", "logs", "library_other"]],
+  ["Home", ["home"]],
+  ["Dev caches & Bazel", ["dev_cache", "bazel"]],
+  ["Docker", ["docker"]],
+  ["Applications & System", ["applications", "system"]],
+  ["Other", ["other"]],
+];
+const KIND = {
+  git_repo: ["git repo", "k-git"], git_dir: ["git", "k-git"], project: ["project", "k-proj"],
+  build_output: ["build output", "k-build"], vm: ["VM", "k-vm"], disk_image: ["disk image", "k-img"],
+  user_data: ["personal", "k-personal"], photos_library: ["Photos library", "k-personal"],
+  ios_backup: ["iOS backup", "k-personal"], downloads: ["Downloads", "k-dl"],
+};
+const PHASES = [["scan", "Scanning"], ["disk", "Reading disk layout"], ["apps", "Identifying apps"],
+                ["detect", "Finding git repos, build output, VMs"], ["insights", "Analysing"], ["save", "Saving"]];
+const LOCK_MSG = "partially unreadable — grant Full Disk Access to Terminal";
+const GIT_MSG = "Inside a git repository's .git folder — use the git cleanup actions (Git repos tab) instead";
+const ROW_LIMIT = 400;
+const VIEWS = [["disk", "Disk"], ["folders", "Folders"], ["big", "Big files"], ["git", "Git repos"], ["top", "Candidates"]];
+
+let DATA = null;           // ScanResult
+let STATUS = null;         // last /api/status
+let DISK = null;           // live /api/disk
+let JOBS = [];             // /api/jobs
+let rootByPath = new Map();
+let kindIndex = new Map(); // kind -> [outermost nodes]
+let nav = [];              // stack of nodes; [] = all locations
+let view = "disk";
+let groupFilter = null;    // Folders overview restricted to one sidebar group
+let diskSel = null;        // selected disk segment key
+const SORT = { folders: { k: "size", d: -1 }, top: { k: "size", d: -1 }, big: { k: "size", d: -1 }, git: { k: "size", d: -1 } };
+let filterText = "", onlyCand = false, colorBy = "safety";
+let showAll = false;
+let rows = [];             // rows currently rendered in the table (objects)
+let modalState = null;
+let pollTimer = null, jobTimer = null;
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function fmtSize(b) {
+  if (b == null || isNaN(b)) return "—";
+  if (b < 1000) return b + (b === 1 ? " byte" : " bytes");
+  const u = ["kB", "MB", "GB", "TB", "PB"];
+  let v = b, i = -1;
+  while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+  return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + " " + u[i];
+}
+function fmtNum(n) { return n == null ? "—" : Number(n).toLocaleString(); }
+function fmtPct(p) { return p >= 10 ? p.toFixed(0) + "%" : p >= 0.1 ? p.toFixed(1) + "%" : "<0.1%"; }
+function ago(ts) {
+  if (!ts) return "—";
+  let s = Date.now() / 1000 - ts;
+  if (s < 0) s = 0;
+  const unit = (n, w) => { n = Math.floor(n); return n + " " + w + (n === 1 ? "" : "s") + " ago"; };
+  if (s < 45) return "just now";
+  if (s < 3600) return unit(Math.max(1, s / 60), "minute");
+  if (s < 86400) return unit(s / 3600, "hour");
+  if (s < 86400 * 30.5) return unit(s / 86400, "day");
+  if (s < 86400 * 365) return unit(s / (86400 * 30.4), "month");
+  return unit(s / (86400 * 365), "year");
+}
+function fmtDuration(s) {
+  if (s == null) return "";
+  s = Math.round(s);
+  return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s";
+}
+function tilde(p) {
+  const h = DATA && DATA.home;
+  if (h && p && (p === h || p.startsWith(h + "/"))) return "~" + p.slice(h.length);
+  return p || "";
+}
+function baseName(p) { return (p || "").split("/").pop(); }
+function dirName(p) { const i = (p || "").lastIndexOf("/"); return i > 0 ? p.slice(0, i) : "/"; }
+function flagsOf(n) { return (n && n.flags) || []; }
+function primaryFlag(n) { const f = flagsOf(n); for (const x of FLAG_ORDER) if (f.includes(x)) return x; return null; }
+function isDrillable(n) { const t = drillTarget(n); return !!(t && !t.synthetic && !t.link_root && t.is_dir !== false && t.children && t.children.length); }
+function drillTarget(n) {
+  if (!n || n.synthetic) return null;
+  const r = rootByPath.get(n.path);
+  if (r && r !== n && r.children && r.children.length) return r;
+  return n;
+}
+function isRoot(n) { return !!(n && !n.synthetic && !n.link_root && rootByPath.has(n.path)); }
+function rootByLabel(l) { return (DATA && DATA.roots || []).find((r) => r.label === l) || null; }
+function inGit(path) { return (path || "").split("/").includes(".git"); }
+function kindBadge(k, extraTitle) {
+  if (!k) return "";
+  const d = KIND[k] || [k.replace(/_/g, " "), "k-proj"];
+  return `<span class="badge kind ${d[1]}"${extraTitle ? ` title="${esc(extraTitle)}"` : ""}>${esc(d[0])}</span>`;
+}
+function unblockedFrees(acts) { return (acts || []).reduce((s, a) => s + (a && !a.blocked && !a.frees_estimated && a.frees > 0 ? a.frees : 0), 0); }
+function freesTxt(d) {
+  if (!d.frees) return "frees little or nothing";
+  return d.frees_estimated ? "frees up to ~" + fmtSize(d.frees) + " (estimate)" : "frees ~" + fmtSize(d.frees);
+}
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (method === "POST") {
+    opt.headers["Content-Type"] = "application/json";
+    opt.headers["X-LL-Token"] = TOKEN;
+    opt.body = JSON.stringify(body || {});
+  }
+  let r;
+  try { r = await fetch(url, opt); }
+  catch (e) { return { ok: false, error: "Cannot reach the LibraryLens server — is it still running?", _status: 0 }; }
+  let j;
+  try { j = await r.json(); } catch (e) { j = { ok: false, error: "HTTP " + r.status }; }
+  if (j && typeof j === "object" && !Array.isArray(j)) { j._status = r.status; if (!r.ok && j.ok === undefined) j.ok = false; }
+  return j;
+}
+
+// ---------- data preparation ----------
+function prepare() {
+  rootByPath = new Map();
+  kindIndex = new Map();
+  for (const r of DATA.roots || []) rootByPath.set(r.path, r);
+  const seenKind = new Set();
+  // _rc = likely reclaimable bytes in subtree (flagged & not dangerous, plus unblocked actions); _run = running app inside
+  const walk = (n, kindAbove, nested) => {
+    let rc = 0, run = null;
+    const k = n.kind && !n.synthetic && !n.link_root ? n.kind : null;
+    if (k && !kindAbove && !nested && !seenKind.has(n.path)) {
+      seenKind.add(n.path);
+      if (!kindIndex.has(k)) kindIndex.set(k, []);
+      kindIndex.get(k).push(n);
+    }
+    for (const c of n.children || []) { walk(c, kindAbove || k, nested); rc += c._rc; if (!run && c._run) run = c._run; }
+    if (n.in_use) run = n.app || { name: "an app" };
+    rc += unblockedFrees(n.actions);
+    if (looksReclaimable(n)) rc = Math.max(rc, n.size || 0);
+    n._rc = Math.min(rc, n.size || 0);
+    n._run = run;
+  };
+  for (const r of DATA.roots || []) walk(r, null, !!r.nested_in);
+}
+// client-side approximation of insights' candidate rule (the exact list is summary.top_candidates)
+const KEEP_KINDS = new Set(["project", "git_repo", "git_dir", "user_data", "photos_library", "ios_backup"]);
+function looksReclaimable(n) {
+  const f = flagsOf(n);
+  if (!f.length || n.synthetic || KEEP_KINDS.has(n.kind)) return false;
+  if (n.safety === "safe") return true;
+  return n.safety === "caution" && (f.includes("orphaned") || f.includes("old_version"));
+}
+function groupOf(r) {
+  for (const [g, cats] of GROUPS) if (cats.includes(r.category)) return g;
+  return "Other";
+}
+function topRoots() { return (DATA.roots || []).filter((r) => !r.nested_in); }
+function overviewNode() {
+  let rs = topRoots();
+  if (groupFilter) rs = (DATA.roots || []).filter((r) => groupOf(r) === groupFilter);
+  const counted = rs.filter((r) => !r.nested_in);
+  return { name: groupFilter || "All locations", path: "", is_dir: true, _overview: true, children: rs.slice().sort((a, b) => b.size - a.size),
+           size: counted.reduce((s, r) => s + (r.size || 0), 0), files: counted.reduce((s, r) => s + (r.files || 0), 0) };
+}
+function current() { return nav.length ? nav[nav.length - 1] : overviewNode(); }
+// chain of nodes from the best root down to `path` (deepest match)
+function locate(path) {
+  let best = null;
+  for (const r of DATA.roots || []) {
+    if (!(path === r.path || path.startsWith(r.path + "/"))) continue;
+    if ((r.exclude || []).some((e) => path === e || path.startsWith(e + "/"))) continue;
+    const chain = [r];
+    let cur = r;
+    while (cur.path !== path) {
+      let nxt = null;
+      for (const c of cur.children || []) {
+        if (!c.synthetic && !c.link_root && (c.path === path || path.startsWith(c.path + "/"))) { nxt = c; break; }
+      }
+      if (!nxt) break;
+      chain.push(nxt); cur = nxt;
+    }
+    const exact = cur.path === path;
+    const score = (exact ? 1e6 : 0) + chain.length * 10 + (r.nested_in ? 1 : 0);
+    if (!best || score > best.score) best = { chain, exact, score, node: exact ? cur : null };
+  }
+  return best;
+}
+function effectiveApp(chain) {
+  for (let i = chain.length - 1; i >= 0; i--) if (chain[i] && chain[i].app) return { app: chain[i].app, inherited: i !== chain.length - 1 };
+  return null;
+}
+function deepest(chain, key) { for (let i = chain.length - 1; i >= 0; i--) if (chain[i] && chain[i][key]) return chain[i]; return null; }
+function navChain() { return nav.slice(); }
+
+// ---------- loading / status ----------
+function restoreNav(rootKey, path) {
+  nav = [];
+  const r = (DATA.roots || []).find((x) => x.label === rootKey) || rootByPath.get(rootKey);
+  if (!r) return;
+  nav.push(r);
+  let cur = r;
+  while (path && cur.path !== path && path.startsWith(cur.path + "/")) {
+    const c = (cur.children || []).find((x) => !x.synthetic && !x.link_root && (x.path === path || path.startsWith(x.path + "/")));
+    if (!c || !isDrillable(c)) break;
+    cur = drillTarget(c);
+    nav.push(cur);
+  }
+}
+function syncHash() {
+  const p = new URLSearchParams();
+  if (view !== "disk") p.set("view", view);
+  if (view === "folders" && nav.length) { p.set("root", nav[0].label || nav[0].path); p.set("path", nav[nav.length - 1].path); }
+  if (view === "folders" && !nav.length && groupFilter) p.set("group", groupFilter);
+  const h = p.toString();
+  if (location.hash.slice(1) !== h) history.replaceState(null, "", h ? "#" + h : location.pathname);
+}
+let firstLoad = true;
+async function loadScan() {
+  let rootKey = nav.length ? (nav[0].label || nav[0].path) : null;
+  let path = nav.length ? nav[nav.length - 1].path : null;
+  if (firstLoad) {
+    firstLoad = false;
+    const p = new URLSearchParams(location.hash.slice(1));
+    rootKey = p.get("root"); path = p.get("path");
+    const v = p.get("view");
+    view = VIEWS.some((x) => x[0] === v) ? v : v === "browse" || rootKey ? "folders" : "disk";
+    groupFilter = GROUPS.some((g) => g[0] === p.get("group")) ? p.get("group") : null;
+  }
+  const j = await api("GET", "/api/scan");
+  if (!j || j.status === "none" || !j.roots) { DATA = null; nav = []; renderAll(); return; }
+  delete j._status;
+  DATA = j;
+  prepare();
+  if (rootKey) restoreNav(rootKey, path); else nav = [];
+  renderAll();
+}
+async function loadDisk() {
+  const j = await api("GET", "/api/disk");
+  if (j && j._status === 200) { delete j._status; DISK = j; if (view === "disk" && DATA) renderMain(); }
+}
+async function pollStatus() {
+  const s = await api("GET", "/api/status");
+  if (!s || s._status !== 200) { schedulePoll(2000); return; }
+  const wasRunning = STATUS && STATUS.running;
+  STATUS = s;
+  renderProgress();
+  if (s.jobs_running && !jobTimer) pollJobs();
+  if (s.running) { schedulePoll(500); return; }
+  schedulePoll(4000);  // idle: notice background rescans started after actions
+  if (wasRunning) {
+    if (s.state === "cancelled") toast("Scan cancelled — showing the previous result.");
+    else if (s.error) showBanner("Scan failed: " + s.error);
+    else { await loadScan(); loadDisk(); }
+  }
+}
+function schedulePoll(ms) { clearTimeout(pollTimer); pollTimer = setTimeout(pollStatus, ms); }
+async function startScan(only) {
+  hideBanner();
+  const j = await api("POST", "/api/scan", only ? { only } : {});
+  if (!j.ok) { showBanner(j.error || "Could not start the scan"); return; }
+  STATUS = j.status; renderProgress(); if (!DATA) renderMain(); schedulePoll(400);
+}
+async function cancelScan() {
+  $("#btn-cancel").disabled = true; $("#btn-cancel").textContent = "Cancelling…";
+  const j = await api("POST", "/api/scan/cancel", {});
+  if (!j.ok) toast(j.error || "Could not cancel", true);
+  schedulePoll(200);
+}
+async function pollJobs() {
+  clearTimeout(jobTimer); jobTimer = null;
+  const j = await api("GET", "/api/jobs");
+  if (!Array.isArray(j)) { jobTimer = setTimeout(pollJobs, 2000); return; }
+  const before = new Map(JOBS.map((x) => [x.id, x.state]));
+  JOBS = j;
+  let finished = false;
+  for (const x of JOBS) {
+    if (before.get(x.id) === "running" && x.state !== "running") {
+      finished = true;
+      if (x.state === "done") toast(`${x.label || x.action} finished${x.freed ? " — freed " + fmtSize(x.freed) : ""}.${x.rescan && x.rescan.length ? " Rescanning " + x.rescan.join(", ") + "…" : ""}`);
+      else toast(`${x.label || x.action} failed: ${x.error || "unknown error"}`, true);
+    }
+  }
+  renderJobs(); renderHeader();
+  if (JOBS.some((x) => x.state === "running")) jobTimer = setTimeout(pollJobs, 1000);
+  if (finished) { await loadScan(); schedulePoll(200); }
+}
+function showBanner(msg) { const b = $("#banner"); b.textContent = msg; b.classList.add("on"); }
+function hideBanner() { $("#banner").classList.remove("on"); }
+let toastTimer = null;
+function toast(msg, bad) {
+  const t = $("#toast"); t.textContent = msg; t.className = "on" + (bad ? " bad" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ""; }, 9000);
+}
+
+// ---------- rendering ----------
+function renderAll() { renderHeader(); renderSidebar(); renderMain(); renderProgress(); }
+
+function renderHeader() {
+  const sm = (DATA && DATA.summary) || {};
+  const total = sm.total != null ? sm.total : DATA ? overviewNode().size : null;
+  $("#h-total").textContent = DATA ? fmtSize(total) : "—";
+  const rec = $("#h-rec");
+  rec.textContent = DATA && sm.reclaimable != null ? fmtSize(sm.reclaimable) : "—";
+  rec.title = (sm.actions_reclaimable ? `${fmtSize(sm.reclaimable - sm.actions_reclaimable)} via Move to Trash + ${fmtSize(sm.actions_reclaimable)} via git cleanup actions` : "") +
+    (sm.actions_reclaimable_estimated ? `\nplus up to ~${fmtSize(sm.actions_reclaimable_estimated)} more from git gc (estimate, not included)` : "");
+  const bf = sm.by_flag || {};
+  const running = JOBS.filter((x) => x.state === "running").length;
+  $("#h-flags").innerHTML = (running ? `<button type="button" class="chip job" data-go="git"><span class="spin" style="width:10px;height:10px"></span>${running} job${running > 1 ? "s" : ""} running</button>` : "") +
+    FLAG_ORDER.filter((f) => bf[f]).map((f) =>
+    `<span class="chip" title="${esc(FLAG_LABEL_PL[f])}: ${esc(fmtSize(bf[f]))} (categories can overlap)"><span class="dot" style="background:var(--f-${f})"></span>${esc(FLAG_LABEL_PL[f])} <b>${esc(fmtSize(bf[f]))}</b></span>`).join("");
+  $("#h-scan").innerHTML = DATA ? `Scanned <b title="${esc(new Date(DATA.scanned_at * 1000).toLocaleString())}">${esc(ago(DATA.scanned_at))}</b><br><span class="faint">took ${esc(fmtDuration(DATA.duration_s))}</span>` : "";
+  $("#btn-rescan").style.display = DATA ? "" : "none";
+}
+
+function phaseLabel(s) {
+  const p = PHASES.find((x) => x[0] === s.phase);
+  let l = p ? p[1] : "Scanning";
+  if (s.only && s.only.length && (!s.phase || s.phase === "scan")) l = "Rescanning " + s.only.join(", ");
+  return l;
+}
+function renderProgress() {
+  const s = STATUS, on = !!(s && s.running);
+  $("#progress").classList.toggle("on", on);
+  $("#btn-rescan").disabled = on;
+  $("#btn-rescan").textContent = on ? "Scanning…" : "Rescan all";
+  document.querySelectorAll("[data-needs-idle]").forEach((b) => { b.disabled = on; });
+  const es = $("#empty-scan");
+  if (es) es.disabled = on;
+  if (!on) return;
+  const phase = phaseLabel(s);
+  $("#p-phase").textContent = s.cancel_requested ? "Cancelling" : phase;
+  const pi = PHASES.findIndex((x) => x[0] === s.phase);
+  $("#p-steps").innerHTML = PHASES.map((x, i) => `<i class="${i < pi ? "done" : i === pi ? "on" : ""}" title="${esc(x[1])}"></i>`).join("");
+  $("#p-cur").textContent = "‎" + (s.phase === "scan" || !s.phase ? tilde(s.current || "") : "") + "‎";
+  $("#p-el").textContent = s.elapsed != null ? fmtDuration(s.elapsed) : "";
+  const cb = $("#btn-cancel");
+  cb.disabled = !!s.cancel_requested; cb.textContent = s.cancel_requested ? "Cancelling…" : "Cancel";
+  const ep = $("#empty-progress");
+  if (ep) ep.textContent = phase + "… " + tilde(s.current || "") + (s.elapsed != null ? " · " + fmtDuration(s.elapsed) : "");
+}
+
+function renderSidebar() {
+  const el = $("#sidebar");
+  if (!DATA) { el.innerHTML = ""; return; }
+  const roots = DATA.roots || [];
+  const max = Math.max(1, ...roots.map((r) => r.size || 0));
+  const active = view === "folders" && nav.length ? nav[0] : null;
+  let html = `<button class="root-item${view === "folders" && !active && !groupFilter ? " active" : ""}" data-root="">${""}<div class="row1"><span class="nm"><b>All locations</b></span><span class="sz">${esc(fmtSize(topRoots().reduce((s, r) => s + (r.size || 0), 0)))}</span></div></button>`;
+  for (const [gname] of GROUPS) {
+    const items = roots.filter((r) => groupOf(r) === gname);
+    if (!items.length) continue;
+    // keep nested roots right under their parent
+    const tops = items.filter((r) => !r.nested_in || !items.some((p) => p.label === r.nested_in)).sort((a, b) => b.size - a.size);
+    const ordered = [];
+    for (const t of tops) { ordered.push(t); for (const n of items) if (n.nested_in === t.label && n !== t) ordered.push(n); }
+    const gsum = items.filter((r) => !r.nested_in).reduce((s, r) => s + (r.size || 0), 0);
+    const gtitle = gsum ? "" : "All of these lie inside other locations and are counted there";
+    html += `<h3><button type="button" data-group="${esc(gname)}" class="${view === "folders" && !nav.length && groupFilter === gname ? "active" : ""}" title="${esc(gtitle || "Show " + gname + " locations")}"><span>${esc(gname)}</span><span>${gsum ? esc(fmtSize(gsum)) : `<span class="faint">(${esc(fmtSize(items.reduce((s, r) => s + (r.size || 0), 0)))})</span>`}</span></button></h3>`;
+    for (const r of ordered) {
+      const i = roots.indexOf(r);
+      const nestedLbl = r.nested_in ? ` <span class="faint" title="Lies inside ${esc(r.nested_in)}; not double-counted in totals">↳ in ${esc(r.nested_in)}</span>` : "";
+      const w = ((r.size || 0) / max * 100).toFixed(1), rw = r.size ? ((r._rc || 0) / r.size * 100).toFixed(1) : 0;
+      const sc = r.scanned_at ? " — scanned " + ago(r.scanned_at) : "";
+      html += `<button class="root-item${r.nested_in ? " nested" : ""}${active === r ? " active" : ""}" data-root="${i}" title="${esc(tilde(r.path))}${r._rc ? " — " + esc(fmtSize(r._rc)) + " likely reclaimable" : ""}${esc(sc)}">
+        <div class="row1"><span class="nm">${r.error ? '<span class="lock">🔒</span> ' : ""}${esc(r.label || r.name)}${nestedLbl}</span><span class="sz">${esc(fmtSize(r.size))}</span></div>
+        <div class="bar"><i style="width:${w}%;background:linear-gradient(90deg,var(--tm-safe) ${(rw)}%,var(--bar2) ${(rw)}%)"></i></div></button>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function tabsHtml() {
+  const cnt = { big: (DATA.big_files || []).length, git: (DATA.git_repos || []).length, top: ((DATA.summary || {}).top_candidates || []).length };
+  return `<div class="tabs" role="tablist">` + VIEWS.map(([k, l]) =>
+    `<button type="button" role="tab" data-view="${k}" class="${view === k ? "on" : ""}" aria-selected="${view === k}">${esc(l)}${cnt[k] ? `<span class="cnt">${cnt[k]}</span>` : ""}</button>`).join("") + `</div>`;
+}
+function toolsHtml(withCand) {
+  return `<input type="search" id="filter" placeholder="Filter…  ( / )" value="${esc(filterText)}" aria-label="Filter">` +
+    (withCand ? `<label class="toggle"><input type="checkbox" id="onlycand"${onlyCand ? " checked" : ""}> Only candidates</label>` : "");
+}
+function renderMain() {
+  const m = $("#main");
+  syncHash();
+  if (!DATA) {
+    const running = STATUS && STATUS.running;
+    m.innerHTML = `<div class="empty"><h2>No scan yet</h2>
+      <div class="muted">LibraryLens measures your whole Data volume — <span class="mono">~/Library</span>, your home folder, developer caches, Bazel, Docker,<br>applications — works out which app owns each folder, finds git leftovers, build output and VMs, and points out what is safe to clean up.</div>
+      <button class="primary" id="empty-scan" type="button"${running ? " disabled" : ""}>Scan now</button>
+      <div class="muted mono" id="empty-progress">${running ? "Scanning…" : "A full scan takes a few minutes. Nothing is changed on disk."}</div></div>`;
+    $("#empty-scan").onclick = () => startScan();
+    renderProgress();
+    return;
+  }
+  if (view === "disk") renderDisk(m);
+  else if (view === "big") renderBig(m);
+  else if (view === "git") renderGit(m);
+  else if (view === "top") renderTopView(m);
+  else renderFolders(m);
+  renderProgress();
+}
+function bindTools(rerender) {
+  const f = $("#filter");
+  if (f) f.oninput = () => { filterText = f.value; showAll = false; rerender(); };
+  const oc = $("#onlycand");
+  if (oc) oc.onchange = (e) => { onlyCand = e.target.checked; showAll = false; rerender(); };
+}
+function matches(n, app) {
+  if (onlyCand && !(n._rc > 0)) return false;
+  if (!filterText) return true;
+  const q = filterText.toLowerCase();
+  return (n.name || "").toLowerCase().includes(q) || (n.label || "").toLowerCase().includes(q) ||
+         (app && (app.name || "").toLowerCase().includes(q)) || (n.app && (n.app.name || "").toLowerCase().includes(q)) ||
+         (n.kind && (KIND[n.kind] ? KIND[n.kind][0] : n.kind).toLowerCase().includes(q));
+}
+
+// ---------- disk tab ----------
+const SEG_STYLE = {
+  volumes: ["--s-volumes", false], library: ["--s-library", false], home: ["--s-home", false], vm: ["--s-vm", false],
+  personal: ["--s-personal", true], dev: ["--s-dev", false], docker: ["--s-docker", false], apps: ["--s-apps", false],
+  other: ["--s-other", false], unaccounted: ["--s-unacc", true], free: ["--s-free", true],
+};
+const SEG_KEYS = {
+  system_volumes: { g: "volumes" }, library: { g: "library", group: "Library" }, home: { g: "home", group: "Home" },
+  vms: { g: "vm", kinds: ["vm"] }, personal: { g: "personal", kinds: ["user_data", "photos_library", "ios_backup", "downloads"] },
+  dev: { g: "dev", group: "Dev caches & Bazel" }, docker: { g: "docker", group: "Docker" },
+  apps_system: { g: "apps", group: "Applications & System" }, other: { g: "other", group: "Other" },
+  unaccounted: { g: "unaccounted" }, free: { g: "free" },
+};
+function classifySeg(seg) {
+  if (SEG_KEYS[seg.key]) return SEG_KEYS[seg.key];
+  const k = ((seg.key || "") + " " + (seg.label || "")).toLowerCase();
+  if (/free/.test(k)) return { g: "free" };
+  if (/unaccount/.test(k)) return { g: "unaccounted" };
+  if (/volume|preboot|recovery|^vol|nix/.test(k)) return { g: "volumes" };
+  if (/\bvms?\b|virtual/.test(k)) return { g: "vm", kinds: ["vm"] };
+  if (/personal|user_data/.test(k)) return { g: "personal", kinds: ["user_data", "photos_library", "ios_backup"] };
+  if (/docker/.test(k)) return { g: "docker", group: "Docker" };
+  if (/dev|bazel/.test(k)) return { g: "dev", group: "Dev caches & Bazel" };
+  if (/app|system/.test(k)) return { g: "apps", group: "Applications & System" };
+  if (/library/.test(k)) return { g: "library", group: "Library" };
+  if (/home|project/.test(k)) return { g: "home", group: "Home" };
+  return { g: "other", group: "Other" };
+}
+function diskInfo() { return DISK || DATA.disk || {}; }
+function fallbackSegments() {
+  // older scans without summary.disk_segments: build them from the roots
+  const dk = diskInfo(), out = [];
+  for (const [g] of GROUPS) {
+    const s = topRoots().filter((r) => groupOf(r) === g).reduce((t, r) => t + (r.size || 0), 0);
+    if (s) out.push({ key: g.toLowerCase(), label: g, size: s });
+  }
+  const used = dk.data_volume && dk.data_volume.used, total = (DATA.summary || {}).total;
+  if (used && total != null && used > total) out.push({ key: "unaccounted", label: "Unaccounted", size: used - total });
+  if (dk.container && dk.container.free) out.push({ key: "free", label: "Free", size: dk.container.free });
+  return out;
+}
+function renderDisk(m) {
+  const sm = DATA.summary || {};
+  const dk = diskInfo();
+  const c = dk.container || {};
+  const native = Array.isArray(sm.disk_segments) && sm.disk_segments.length;
+  const segs = (native ? sm.disk_segments : fallbackSegments()).filter((s) => s && s.size > 0).map((s) => Object.assign({}, s, classifySeg(s)));
+  const segTotal = Math.max(segs.reduce((t, s) => t + s.size, 0), c.size || 0, 1);
+  const actRec = sm.actions_reclaimable || 0;
+  const unacc = sm.unaccounted != null ? sm.unaccounted : (segs.find((s) => s.g === "unaccounted") || {}).size;
+  const tile = (lbl, val, sub, cls) => `<div class="tile"><div class="lbl">${esc(lbl)}</div><div class="val ${cls || ""}">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  let h = tabsHtml();
+  h += `<div class="card"><h2>Disk <span class="muted">${dk.data_volume && dk.data_volume.name ? "· APFS container with “" + esc(dk.data_volume.name) + "”" : ""}${DISK && DISK.stale ? " · live disk info unavailable, showing the scan’s copy" : ""}</span></h2>
+    <div class="tiles">
+      ${tile("Container size", esc(fmtSize(c.size)), dk.data_volume && dk.data_volume.used != null ? "Data volume uses " + esc(fmtSize(dk.data_volume.used)) : "")}
+      ${tile("Used", esc(fmtSize(c.used)), c.size ? esc(fmtPct(c.used / c.size * 100)) + " of the container" : "")}
+      ${tile("Free", esc(fmtSize(c.free)), dk.purgeable ? "+ " + esc(fmtSize(dk.purgeable)) + " purgeable" : "")}
+      ${tile("Likely reclaimable", esc(fmtSize(sm.reclaimable)), (actRec ? `${esc(fmtSize((sm.reclaimable || 0) - actRec))} via Trash · ${esc(fmtSize(actRec))} via git cleanup` : "via Move to Trash") +
+        (sm.actions_reclaimable_estimated ? `<br>+ up to ~${esc(fmtSize(sm.actions_reclaimable_estimated))} from git gc (estimate)` : ""), "green")}
+      ${tile("Unaccounted", esc(fmtSize(unacc)), `<button type="button" class="link" data-seg-key="unaccounted">why?</button>`)}
+    </div>`;
+  if (segs.length) {
+    const desc = segs.map((s) => `${s.label} ${fmtSize(s.size)} (${fmtPct(s.size / segTotal * 100)})`).join(", ");
+    h += `<div class="dbar" role="group" aria-label="Disk usage by area: ${esc(desc)}">` + segs.map((s, i) => {
+      const st = SEG_STYLE[s.g] || SEG_STYLE.other, p = s.size / segTotal * 100;
+      const cls = (s.g === "unaccounted" ? " hatch" : "") + (s.g === "free" ? " free" : "") + (st[1] ? " ink-dark" : "") + (diskSel === s.key ? " sel" : "");
+      const inner = p > 9 ? `<b>${esc(s.label)}</b><span>${esc(fmtSize(s.size))}</span>` : p > 4.5 ? `<span>${esc(fmtSize(s.size))}</span>` : "";
+      return `<button type="button" class="seg${cls}" style="--sc:var(${st[0]});flex-grow:${p.toFixed(3)}" data-seg="${i}" aria-label="${esc(s.label)}: ${esc(fmtSize(s.size))}, ${esc(fmtPct(p))}">${inner}</button>`;
+    }).join("") + `</div>`;
+    h += `<ul class="seglegend">` + segs.map((s, i) => {
+      const st = SEG_STYLE[s.g] || SEG_STYLE.other;
+      return `<li><button type="button" data-seg="${i}" class="${diskSel === s.key ? "sel" : ""}"><span class="sw${s.g === "unaccounted" ? " hatch" : ""}${s.g === "free" ? " free" : ""}" style="--sc:var(${st[0]})"></span><span>${esc(s.label)}</span><span class="v">${esc(fmtSize(s.size))}</span><span class="p">${esc(fmtPct(s.size / segTotal * 100))}</span></button></li>`;
+    }).join("") + `</ul>`;
+    if (!native) h += `<p class="muted" style="margin:10px 0 0">Approximate breakdown from the scanned locations — run <b>Rescan all</b> for the full disk breakdown.</p>`;
+    h += `<p class="faint" style="margin:8px 0 0;font-size:11.5px">Click an area to see what is in it.</p>`;
+    const sel = segs.find((s) => s.key === diskSel);
+    if (sel) h += segDetail(sel);
+  } else {
+    h += `<p class="muted">No disk breakdown in this scan yet — run <b>Rescan all</b>.</p>`;
+  }
+  h += `</div><div class="grid2">${unaccountedCard(dk, unacc)}${volumesCard(dk)}</div>`;
+  m.innerHTML = h;
+}
+function segDetail(s) {
+  let h = `<div class="detail"><h3>${esc(s.label)} — ${esc(fmtSize(s.size))}</h3>`;
+  if (s.kinds) {
+    const items = [];
+    for (const k of s.kinds) for (const n of kindIndex.get(k) || []) items.push({ n, k });
+    for (const e of DATA.special || []) if (s.kinds.includes(e.kind) && !items.some((x) => x.n.path === e.path)) items.push({ n: Object.assign({ name: baseName(e.path) }, e), k: e.kind, entry: true });
+    items.sort((a, b) => (b.n.size || 0) - (a.n.size || 0));
+    if (!items.length) h += `<p class="muted">Nothing of this kind was found in the tree.</p>`;
+    else h += `<table><tbody>` + items.slice(0, 40).map((x) => `<tr class="drill" data-loc="${esc(x.n.path)}" tabindex="0"><td><div class="name"><div class="n1"><span class="t">${esc(x.n.name || baseName(x.n.path))}</span>${kindBadge(x.k)}</div><div class="reason mono">${esc(tilde(x.n.path))}</div></div></td><td class="num">${esc(fmtSize(x.n.size))}</td><td class="muted">${esc(ago(x.n.mtime))}</td></tr>`).join("") + `</tbody></table>`;
+  } else if (s.g === "volumes") {
+    h += `<p class="muted" style="margin:0 0 6px">The macOS system, Preboot, Recovery, VM and other APFS volumes share this container with your Data volume. They are managed by macOS.</p>`;
+    if (Array.isArray(s.items) && s.items.length) h += `<dl class="kv">` + s.items.map((v) => `<dt>${esc(v.name)}${v.role ? ` <span class="faint">(${esc(v.role)})</span>` : ""}</dt><dd>${esc(fmtSize(v.size))}</dd>`).join("") + `</dl>`;
+  } else if (s.g === "unaccounted") {
+    h += `<p class="muted" style="margin:0">Used on the Data volume but not readable by LibraryLens without admin rights — see the explanation below.</p>`;
+  } else if (s.g === "free") {
+    const dk = diskInfo();
+    h += `<p class="muted" style="margin:0">Free space in the container${dk.purgeable ? `; macOS can additionally purge about ${esc(fmtSize(dk.purgeable))} (caches, local snapshots) when space runs low` : ""}.</p>`;
+  } else {
+    const rs = (DATA.roots || []).filter((r) => groupOf(r) === s.group).sort((a, b) => b.size - a.size);
+    h += `<p style="margin:0"><button type="button" class="small" data-group="${esc(s.group)}">Open ${esc(s.group)} in Folders →</button> <span class="muted">${rs.length} location${rs.length === 1 ? "" : "s"}${s.g === "home" ? "; VMs and personal folders are shown separately" : ""}</span></p>`;
+  }
+  return h + `</div>`;
+}
+function unaccountedCard(dk, unacc) {
+  const users = (dk.users || []).filter((u) => u && u.readable === false);
+  const snaps = dk.snapshots || [];
+  const kindTxt = { os_update: "OS update", time_machine: "Time Machine", other: "other" };
+  let h = `<div class="card" id="card-unacc"><h2>Unaccounted ${esc(fmtSize(unacc))}</h2>
+    <p class="muted" style="margin:4px 0 6px">Space the Data volume reports as used that LibraryLens cannot measure: other users’ homes (e.g. <span class="mono">administrator</span>) and system areas are not readable without admin; local snapshots; purgeable space. LibraryLens never asks for admin rights.</p><ul class="plain">`;
+  h += `<li>Other users’ homes not readable: ${users.length ? users.map((u) => `<span class="mono">${esc(u.home || u.name)}</span>`).join(", ") : '<span class="faint">none found</span>'}</li>`;
+  h += `<li>Local snapshots: ${snaps.length ? snaps.length + "<ul class=\"plain\">" + snaps.slice(0, 8).map((s) => `<li><span class="mono">${esc(s.name)}</span> <span class="badge">${esc(kindTxt[s.kind] || s.kind || "snapshot")}</span></li>`).join("") + (snaps.length > 8 ? `<li class="faint">… and ${snaps.length - 8} more</li>` : "") + "</ul>" : '<span class="faint">none</span>'}</li>`;
+  h += `<li>Purgeable space: ${dk.purgeable != null ? esc(fmtSize(dk.purgeable)) : '<span class="faint">not available without admin</span>'}</li>`;
+  h += `<li>System areas such as parts of <span class="mono">/private/var</span> and <span class="mono">/System/Volumes/Data/.Spotlight-V100</span></li>`;
+  return h + `</ul></div>`;
+}
+function volumesCard(dk) {
+  const vols = (dk.volumes || []).slice().sort((a, b) => (b.used || 0) - (a.used || 0));
+  let h = `<div class="card" id="card-vols"><h2>Volumes <span class="muted">${dk.collected_at ? "· " + esc(ago(dk.collected_at)) : ""}</span></h2>`;
+  if (!vols.length) return h + `<p class="muted">No volume information${dk.error ? " (" + esc(dk.error) + ")" : ""}.</p></div>`;
+  h += `<table style="margin-top:6px"><thead><tr><th>Volume</th><th>Role</th><th class="num">Used</th></tr></thead><tbody>` +
+    vols.map((v) => `<tr><td>${esc(v.name)}</td><td class="muted">${esc(v.role || "—")}</td><td class="num">${esc(fmtSize(v.used))}</td></tr>`).join("") + `</tbody></table>`;
+  return h + `</div>`;
+}
+function segClick(i) {
+  const sm = DATA.summary || {};
+  const native = Array.isArray(sm.disk_segments) && sm.disk_segments.length;
+  const segs = (native ? sm.disk_segments : fallbackSegments()).filter((s) => s && s.size > 0).map((s) => Object.assign({}, s, classifySeg(s)));
+  const s = segs[i];
+  if (!s) return;
+  if (s.group) {
+    const rs = (DATA.roots || []).filter((r) => groupOf(r) === s.group);
+    if (rs.length === 1) { goRoot(rs[0]); return; }
+    if (rs.length > 1) { goGroup(s.group); return; }
+  }
+  diskSel = diskSel === s.key ? null : s.key;
+  renderMain();
+  if (s.g === "unaccounted" || s.g === "volumes") flashCard(s.g === "unaccounted" ? "#card-unacc" : "#card-vols");
+}
+function flashCard(sel) { const c = $(sel); if (c) { c.classList.add("hl"); c.scrollIntoView({ block: "nearest", behavior: "smooth" }); setTimeout(() => c.classList.remove("hl"), 1500); } }
+function goRoot(r) { nav = [r]; groupFilter = null; view = "folders"; showAll = false; renderMain(); renderSidebar(); $("#main").scrollTop = 0; }
+function goGroup(g) { nav = []; groupFilter = g; view = "folders"; showAll = false; renderMain(); renderSidebar(); $("#main").scrollTop = 0; }
+
+// ---------- folders tab ----------
+function renderFolders(m) {
+  const cur = current();
+  let crumbs = nav.length || groupFilter ? `<button type="button" data-crumb="-1">All locations</button>` : `<span class="here">All locations</span>`;
+  if (!nav.length && groupFilter) crumbs += `<span class="sep">›</span><span class="here">${esc(groupFilter)}</span>`;
+  nav.forEach((n, i) => {
+    const label = i === 0 ? (n.label || n.name) : n.name;
+    crumbs += `<span class="sep">›</span>` + (i === nav.length - 1 ? `<span class="here" title="${esc(tilde(n.path))}">${esc(label)}</span>` : `<button type="button" data-crumb="${i}">${esc(label)}</button>`);
+  });
+  const up = `<button type="button" id="btn-up" title="Up one level (Backspace / ←)"${nav.length || groupFilter ? "" : " disabled"}>↑ Up</button>`;
+  const root = nav.length ? nav[0] : null;
+  const info = nav.length ? `<span class="muted">${esc(fmtSize(cur.size))} · ${esc(fmtNum(cur.files))} files${cur._rc ? ` · <span style="color:var(--safe)">${esc(fmtSize(cur._rc))} likely reclaimable</span>` : ""}</span>` : "";
+  const rescan = root ? `<button type="button" class="small" data-rescan="${esc(root.label)}" data-needs-idle title="Rescan only ${esc(root.label)}${root.scanned_at ? " (scanned " + esc(ago(root.scanned_at)) + ")" : ""}">⟳ Rescan ${esc(root.label)}</button>` : "";
+  m.innerHTML = tabsHtml() + `<div class="toolbar">${up}<div class="crumbs">${crumbs}</div>${info}${rescan}
+    <select id="colorby" aria-label="Color treemap by"><option value="safety"${colorBy === "safety" ? " selected" : ""}>Color: safety</option><option value="flag"${colorBy === "flag" ? " selected" : ""}>Color: flag</option></select>${toolsHtml(true)}</div>
+    <div id="treemap" aria-label="Treemap"></div><div class="legend" id="legend"></div><div id="tablewrap" class="tablewrap"></div>`;
+  bindTools(() => { renderTreemap(); renderTable(); });
+  $("#btn-up").onclick = goUp;
+  $("#colorby").onchange = (e) => { colorBy = e.target.value; renderTreemap(); };
+  m.querySelectorAll("[data-crumb]").forEach((b) => b.onclick = () => { const i = +b.dataset.crumb; if (i < 0) groupFilter = null; nav = nav.slice(0, i + 1); showAll = false; renderMain(); renderSidebar(); });
+  renderTreemap();
+  renderTable();
+}
+function visibleChildren() {
+  const cur = current();
+  const inh = effectiveApp(navChain());
+  return (cur.children || []).filter((c) => matches(c, inh && inh.app) || (c.link_root && !onlyCand && !filterText));
+}
+
+// ---------- treemap ----------
+function squarify(items, x, y, w, h) {
+  const out = [];
+  const total = items.reduce((s, it) => s + it.v, 0);
+  if (total <= 0 || w <= 0 || h <= 0) return out;
+  const scale = (w * h) / total;
+  const areas = items.map((it) => ({ it, a: it.v * scale }));
+  let row = [], i = 0;
+  const worst = (r, side) => {
+    let s = 0, mx = 0, mn = Infinity;
+    for (const e of r) { s += e.a; if (e.a > mx) mx = e.a; if (e.a < mn) mn = e.a; }
+    const s2 = s * s, side2 = side * side;
+    return Math.max((side2 * mx) / s2, s2 / (side2 * mn));
+  };
+  const layout = (r) => {
+    const s = r.reduce((t, e) => t + e.a, 0);
+    if (w >= h) {
+      const cw = s / h; let cy = y;
+      for (const e of r) { const eh = e.a / cw; out.push({ it: e.it, x, y: cy, w: cw, h: eh }); cy += eh; }
+      x += cw; w -= cw;
+    } else {
+      const rh = s / w; let cx = x;
+      for (const e of r) { const ew = e.a / rh; out.push({ it: e.it, x: cx, y, w: ew, h: rh }); cx += ew; }
+      y += rh; h -= rh;
+    }
+  };
+  while (i < areas.length) {
+    const side = Math.min(w, h);
+    if (!row.length || worst(row.concat([areas[i]]), side) <= worst(row, side)) { row.push(areas[i]); i++; }
+    else { layout(row); row = []; }
+  }
+  if (row.length) layout(row);
+  return out;
+}
+let tmRects = [];
+function renderTreemap() {
+  const el = $("#treemap");
+  if (!el) return;
+  const W = el.clientWidth, H = el.clientHeight;
+  let kids = visibleChildren().filter((c) => (c.size || 0) > 0 && !c.link_root).sort((a, b) => b.size - a.size);
+  const MAXN = 160;
+  let items = kids.slice(0, MAXN).map((n) => ({ v: n.size, n }));
+  if (kids.length > MAXN) {
+    const rest = kids.slice(MAXN).reduce((s, n) => s + n.size, 0);
+    if (rest > 0) items.push({ v: rest, n: { name: `(${kids.length - MAXN} more)`, synthetic: true, size: rest, _more: true } });
+  }
+  tmRects = squarify(items, 0, 0, W, H);
+  if (!tmRects.length) { el.innerHTML = `<div class="tm-empty">${current().children && current().children.length ? "Nothing matches the filter" : "No sub-folders measured at this depth"}</div>`; renderLegend(); return; }
+  let html = "";
+  tmRects.forEach((r, i) => {
+    if (r.w < 2 || r.h < 2) return;
+    const n = r.it.n;
+    let cls;
+    if (n.synthetic) cls = "c-syn";
+    else if (colorBy === "flag") { const f = primaryFlag(n); cls = f ? "f-" + f : "c-none"; }
+    else cls = n.safety ? "c-" + n.safety : "c-none";
+    const drill = isDrillable(n);
+    let label = "";
+    if (r.w > 46 && r.h > 18) label = `<b>${esc(n.label && isRoot(n) ? n.label : n.name)}</b>` + (r.h > 34 && r.w > 56 ? `<span>${esc(fmtSize(n.size))}</span>` : "");
+    html += `<div class="tm-cell ${cls}${drill ? " drill" : ""}" data-i="${i}" style="left:${r.x.toFixed(1)}px;top:${r.y.toFixed(1)}px;width:${Math.max(0, r.w).toFixed(1)}px;height:${Math.max(0, r.h).toFixed(1)}px">${label}</div>`;
+  });
+  el.innerHTML = html;
+  renderLegend();
+}
+function renderLegend() {
+  const lg = $("#legend");
+  if (!lg) return;
+  const sw = (v, t) => `<span><span class="sw" style="background:var(${v})"></span>${t}</span>`;
+  lg.innerHTML = colorBy === "flag"
+    ? FLAG_ORDER.map((f) => sw("--f-" + f, FLAG_LABEL[f])).join("") + sw("--tm-none", "No flag") + sw("--tm-syn", "Smaller items")
+    : sw("--tm-safe", "Safe to remove") + sw("--tm-caution", "Caution") + sw("--tm-danger", "Danger") + sw("--tm-none", "Not assessed") + sw("--tm-syn", "Smaller items");
+}
+function tipHtml(n, parentSize, app) {
+  const a = n.app || (app && app.app);
+  let h = `<div class="t">${esc(n.label && isRoot(n) ? n.label : n.name)}</div><div class="muted mono">${esc(tilde(n.path || ""))}</div>`;
+  h += `<div><b>${esc(fmtSize(n.size))}</b>${parentSize ? ` · ${(n.size / parentSize * 100).toFixed(1)}%` : ""}${n.files != null ? " · " + esc(fmtNum(n.files)) + " files" : ""}</div>`;
+  if (n.kind) h += `<div>${kindBadge(n.kind)}</div>`;
+  if (a) h += `<div>App: ${esc(a.name)}${a.installed === false ? " (not installed)" : ""}${a.running ? " — running" : ""}</div>`;
+  if (n.mtime) h += `<div class="muted">Modified ${esc(ago(n.mtime))}</div>`;
+  const f = flagsOf(n);
+  if (f.length || n.safety) h += `<div style="margin-top:4px">${f.map((x) => `<span class="flag ${esc(x)}">${esc(FLAG_LABEL[x] || x)}</span>`).join("")}${n.safety ? ` <span class="pill ${esc(n.safety)}">${esc(n.safety)}</span>` : ""}</div>`;
+  if (n.reason) h += `<div class="muted" style="margin-top:4px">${esc(n.reason)}</div>`;
+  if (n.actions && n.actions.length) h += `<div style="margin-top:4px">Cleanup actions: ${esc(n.actions.map((x) => x.label).join("; "))}</div>`;
+  if (n.error) h += `<div style="color:var(--caution)">🔒 ${esc(n.error === "permission" ? LOCK_MSG : "partially unreadable: " + n.error)}</div>`;
+  return h;
+}
+function placeTip(e) {
+  const t = $("#tip"), pad = 14;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  const r = t.getBoundingClientRect();
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+  t.style.left = Math.max(4, x) + "px"; t.style.top = Math.max(4, y) + "px";
+}
+
+// ---------- node table ----------
+function appCell(n, eff) {
+  const own = n.app;
+  const a = own || (eff && eff.app);
+  if (!a) return `<span class="faint">—</span>`;
+  const inherited = !own;
+  let h = `<div class="app${inherited ? " inherited" : ""}" title="${esc([a.bundle_id, a.app_path, a.source ? "matched by " + a.source : ""].filter(Boolean).join("\n"))}"><span class="an">${esc(a.name)}${a.version ? " " + esc(a.version) : ""}</span>`;
+  if (a.kind === "system") h += `<span class="badge sys">macOS</span>`;
+  else if (a.kind === "cli") h += `<span class="badge sys">CLI</span>`;
+  if (a.installed === false) h += `<span class="badge notinst">not installed</span>`;
+  const iv = a.installed_versions || [];
+  if (!inherited && a.version && (flagsOf(n).includes("old_version") || (iv.length && !iv.includes(a.version))))
+    h += `<span class="badge old">old version${iv.length ? " (installed: " + esc(iv.join(", ")) + ")" : ""}</span>`;
+  if (a.running) h += `<span class="badge run">running</span>`;
+  return h + `</div>`;
+}
+function trashBlock(n, eff, chain) {
+  if (n.synthetic) return "scan detail: collapsed small items";
+  if (n.link_root) return "Scanned separately as " + n.link_root;
+  if (isRoot(n)) return "This is a scanned location; open it and move its contents instead";
+  if (n.kind === "git_dir" || inGit(n.path) || (chain || []).some((x) => x && x.kind === "git_dir")) return GIT_MSG;
+  const a = (eff && eff.app) || null;
+  if (n.in_use) return `${a ? a.name : "The app"} is running — quit it first`;
+  const runAnc = (chain || []).find((x) => x && x !== n && x.in_use);
+  if (runAnc) return `Belongs to ${(runAnc.app || a || {}).name || "an app"}, which is running — quit it first`;
+  if (n._run) return `Contains data of ${n._run.name}, which is running — quit it first`;
+  return null;
+}
+function sortRows(list, st) {
+  const key = st.k, dir = st.d;
+  const val = (r) => {
+    const n = r.n;
+    switch (key) {
+      case "name": return (n.label || n.name || "").toLowerCase();
+      case "app": { const a = n.app || (r.eff && r.eff.app); return a ? (a.name || "").toLowerCase() : "￿"; }
+      case "files": return n.files || 0;
+      case "mtime": return n.mtime || 0;
+      case "flags": return flagsOf(n).length * 1e15 + (n._rc || 0);
+      case "safety": return n.safety in SAFETY_RANK ? SAFETY_RANK[n.safety] : 9;
+      case "root": return (r.rootLabel || "").toLowerCase();
+      default: return n.size || 0;
+    }
+  };
+  list.sort((a, b) => {
+    if (!!a.n.synthetic !== !!b.n.synthetic) return a.n.synthetic ? 1 : -1;
+    if (!!a.n.link_root !== !!b.n.link_root) return a.n.link_root ? 1 : -1;
+    const va = val(a), vb = val(b);
+    let c = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    if (c === 0) c = (b.n.size || 0) - (a.n.size || 0);
+    return c * dir;
+  });
+  return list;
+}
+function headerHtml(cols, st) {
+  return `<thead><tr>` + cols.map(([k, label, cls]) => {
+    if (!k) return `<th class="${cls || ""}">${label}</th>`;
+    const on = st.k === k;
+    return `<th class="sortable ${cls || ""}" data-sort="${k}" aria-sort="${on ? (st.d > 0 ? "ascending" : "descending") : "none"}" tabindex="0">${label}${on ? `<span class="arr">${st.d > 0 ? "▲" : "▼"}</span>` : ""}</th>`;
+  }).join("") + `</tr></thead>`;
+}
+const COLS = [["name", "Name"], ["app", "App"], ["size", "Size", "num"], ["files", "Files", "num"], ["mtime", "Last modified"], ["flags", "Flags"], ["safety", "Safety"], [null, "", "actions"]];
+function stubRowHtml(r, i) {
+  const n = r.n, lr = rootByLabel(n.link_root);
+  return `<tr data-i="${i}" class="stub" tabindex="0" title="Open ${esc(n.link_root)}">
+    <td colspan="2"><div class="name"><div class="n1"><span class="ico">↪</span><span class="t">${esc(n.name)}</span></div><div class="reason">scanned separately → <b>${esc(n.link_root)}</b></div></div></td>
+    <td class="num faint" title="Counted in ${esc(n.link_root)}, not here">${lr ? "(" + esc(fmtSize(lr.size)) + ")" : ""}</td><td></td><td></td><td></td><td></td>
+    <td class="actions"><button type="button" class="small" data-act="goroot">Open ${esc(n.link_root)} →</button></td></tr>`;
+}
+function rowHtml(r, i, parentSize) {
+  const n = r.n;
+  if (n.link_root) return stubRowHtml(r, i);
+  const syn = !!n.synthetic;
+  const drill = isDrillable(n);
+  const block = trashBlock(n, r.eff, r.chain);
+  const lock = n.error ? `<span class="lock" title="${esc(n.error === "permission" ? LOCK_MSG : "partially unreadable: " + n.error)}">🔒</span>` : "";
+  const icon = syn ? "⋯" : n.is_dir === false ? "📄" : "📁";
+  const nm = n.label && isRoot(n) && !r.top ? n.label : n.name;
+  const where = r.top ? `<div class="reason mono" title="${esc(tilde(n.path))}">${esc(tilde(dirName(n.path)))}</div>` : "";
+  const rootBadge = isRoot(n) && !r.top ? `<span class="badge root" title="${esc(tilde(n.path))}">${n.nested_in ? "location · in " + esc(n.nested_in) : "location"}</span>` : "";
+  const pct = parentSize ? Math.min(100, (n.size || 0) / parentSize * 100) : 0;
+  const flags = flagsOf(n).map((f) => `<span class="flag ${esc(f)}">${esc(FLAG_LABEL[f] || f)}</span>`).join("");
+  const safety = n.safety ? `<span class="pill ${esc(n.safety)}" title="${esc(n.reason || "")}">${esc(n.safety)}</span>` : `<span class="faint">—</span>`;
+  let acts = "";
+  if (!syn) {
+    acts = `<button type="button" class="small" data-act="reveal" title="Show in Finder">Reveal</button>`;
+    const descs = r.action ? [r.action] : (n.actions || []);
+    if (r.action) acts += `<button type="button" class="small primary trunc" data-act="action" data-aid="${esc(r.action.id)}"${r.action.blocked ? ` disabled title="${esc(r.action.label + " — blocked: " + r.action.blocked)}"` : ` title="${esc(r.action.label)}"`}>${r.action.background ? "Start…" : "Clean up…"}</button>`;
+    else if (descs.length) acts += `<button type="button" class="small primary" data-act="actions" title="${esc(descs.map((d) => d.label + (d.blocked ? " (blocked: " + d.blocked + ")" : "")).join("\n"))}">Clean up${descs.length > 1 ? " (" + descs.length + ")" : ""}…</button>`;
+    if (isRoot(n) && !r.top) acts += `<button type="button" class="small" data-act="rescan" data-needs-idle title="Rescan only ${esc(n.label)}${n.scanned_at ? " — scanned " + esc(ago(n.scanned_at)) : ""}">⟳ Rescan</button>`;
+    else if (!r.action) acts += `<button type="button" class="small" data-act="trash"${block ? ` disabled title="${esc(block)}"` : ` title="Move to Trash…"`}>Move to Trash</button>`;
+  }
+  return `<tr data-i="${i}" class="${syn ? "syn" : ""}${drill ? " drill" : ""}"${syn ? "" : ' tabindex="0"'}>
+    <td><div class="name"><div class="n1"><span class="ico">${icon}</span><span class="t" title="${esc(tilde(n.path))}">${esc(nm)}</span>${lock}${rootBadge}${kindBadge(n.kind)}${drill ? '<span class="faint">›</span>' : ""}</div>${where}${n.reason ? `<div class="reason" title="${esc(n.reason)}">${esc(n.reason)}</div>` : ""}</div></td>
+    <td>${syn ? "" : appCell(n, r.eff)}</td>
+    <td class="num sizecell">${esc(fmtSize(n.size))}${parentSize ? `<div class="sizebar"><i style="width:${pct.toFixed(1)}%"></i></div>` : ""}</td>
+    <td class="num">${esc(fmtNum(n.files))}</td>
+    <td class="muted" title="${n.mtime ? esc(new Date(n.mtime * 1000).toLocaleString()) : ""}">${syn ? "" : esc(ago(n.mtime))}</td>
+    <td>${flags}</td><td>${syn ? "" : safety}</td><td class="actions">${acts}</td></tr>`;
+}
+function renderRows(list, parentSize, emptyMsg, rowFn, cols, st) {
+  rows = list;
+  const wrap = $("#tablewrap");
+  const lim = showAll ? list.length : Math.min(list.length, ROW_LIMIT);
+  let body = "";
+  for (let i = 0; i < lim; i++) body += rowFn(list[i], i, parentSize);
+  if (!list.length) body = `<tr><td colspan="${cols.length}" class="muted" style="text-align:center;padding:24px">${esc(emptyMsg)}</td></tr>`;
+  wrap.innerHTML = `<table>${headerHtml(cols, st)}<tbody>${body}</tbody></table>` +
+    (lim < list.length ? `<div class="more"><button type="button" id="showall">Show all ${fmtNum(list.length)} rows</button></div>` : "");
+  const sa = $("#showall"); if (sa) sa.onclick = () => { showAll = true; renderRows(rows, parentSize, emptyMsg, rowFn, cols, st); };
+  renderProgress();
+}
+function renderTable() {
+  const cur = current();
+  const chain = navChain();
+  const list = visibleChildren().map((n) => {
+    const eff = effectiveApp(chain.concat([n]));
+    return { n, eff, chain: chain.concat([n]) };
+  });
+  renderRows(sortRows(list, SORT.folders), cur.size, (cur.children || []).length ? "Nothing matches the filter" : "No sub-folders measured at this depth", rowHtml, COLS, SORT.folders);
+}
+
+// ---------- candidates tab ----------
+function renderTopView(m) {
+  m.innerHTML = tabsHtml() + `<div class="toolbar"><div class="crumbs"><span class="here">Biggest likely-reclaimable items</span></div>${toolsHtml(false)}</div><div id="tablewrap" class="tablewrap"></div>`;
+  bindTools(renderTop);
+  renderTop();
+}
+function renderTop() {
+  const cands = (DATA.summary && DATA.summary.top_candidates) || [];
+  const list = [];
+  for (const c of cands) {
+    const loc = locate(c.path);
+    let n = loc && loc.node;
+    const action = c.action && typeof c.action === "object" ? c.action : null;
+    if (!n) n = { path: c.path, name: c.name || baseName(c.path), size: c.size, flags: c.flags || [], reason: c.reason, safety: c.safety, kind: c.kind, is_dir: true, _rc: c.size };
+    else if (action) n = Object.assign({}, n, { size: c.size, safety: c.safety, reason: c.reason, _rc: c.size });  // row shows what the action frees
+    const chain = loc ? (loc.node ? loc.chain.slice(0, -1).concat([n]) : loc.chain.concat([n])) : [n];
+    const eff = effectiveApp(chain);
+    if (!matches(n, eff && eff.app)) continue;
+    list.push({ n, eff, chain, top: true, action });
+  }
+  const sum = list.reduce((s, r) => s + (r.action ? r.action.frees || 0 : r.n.size || 0), 0);
+  renderRows(sortRows(list, SORT.top), list.length ? Math.max(...list.map((r) => r.n.size || 0)) : 0,
+             cands.length ? "Nothing matches the filter" : "No candidates found — nothing obviously reclaimable.", rowHtml, COLS, SORT.top);
+  const wrap = $("#tablewrap");
+  if (list.length) wrap.insertAdjacentHTML("afterbegin", `<p class="muted" style="margin:0 0 8px">${list.length} items, about ${esc(fmtSize(sum))} reclaimable. Rows with a blue button are cleaned up by an action instead of Move to Trash. Click a row to see it in context.</p>`);
+}
+
+// ---------- big files tab ----------
+const BIG_COLS = [["name", "File"], ["size", "Size", "num"], ["mtime", "Modified"], ["root", "Location"], [null, "Kind"], [null, "", "actions"]];
+function bigRows() {
+  const q = filterText.toLowerCase();
+  const out = [];
+  for (const e of DATA.big_files || []) {
+    if (q && !(e.path || "").toLowerCase().includes(q) && !(e.root || "").toLowerCase().includes(q)) continue;
+    const loc = locate(e.path);
+    const chain = loc ? loc.chain.slice() : [];
+    const node = loc && loc.node;
+    const anc = node ? chain.slice(0, -1) : chain;
+    const kn = deepest(chain, "kind"), sn = deepest(anc, "safety");
+    const n = node || { path: e.path, name: baseName(e.path), size: e.size, mtime: e.mtime, files: 1, is_dir: false,
+                        safety: sn ? sn.safety : null, reason: sn && sn.reason ? "inside " + (sn.name || "") + ": " + sn.reason : null, _big: true };
+    out.push({ n, e, chain: node ? chain : chain.concat([n]), eff: effectiveApp(chain), rootLabel: e.root || (chain[0] && chain[0].label) || "", kind: kn ? kn.kind : null, big: true });
+  }
+  return out;
+}
+function bigRowHtml(r, i, maxSize) {
+  const n = r.n, e = r.e;
+  const block = trashBlock(n, r.eff, r.chain);
+  const pct = maxSize ? Math.min(100, (e.size || 0) / maxSize * 100) : 0;
+  return `<tr data-i="${i}" class="drill" tabindex="0">
+    <td><div class="name"><div class="n1"><span class="ico">📄</span><span class="t" title="${esc(tilde(e.path))}">${esc(baseName(e.path))}</span></div><div class="reason mono" title="${esc(tilde(e.path))}">${esc(tilde(dirName(e.path)))}</div></div></td>
+    <td class="num sizecell">${esc(fmtSize(e.size))}<div class="sizebar"><i style="width:${pct.toFixed(1)}%"></i></div></td>
+    <td class="muted" title="${e.mtime ? esc(new Date(e.mtime * 1000).toLocaleString()) : ""}">${esc(ago(e.mtime))}</td>
+    <td>${esc(r.rootLabel)}</td>
+    <td>${kindBadge(r.kind)}${n.safety ? ` <span class="pill ${esc(n.safety)}" title="${esc(n.reason || "")}">${esc(n.safety)}</span>` : ""}</td>
+    <td class="actions"><button type="button" class="small" data-act="reveal">Reveal</button><button type="button" class="small" data-act="trash"${block ? ` disabled title="${esc(block)}"` : ` title="Move to Trash…"`}>Move to Trash</button></td></tr>`;
+}
+function renderBig(m) {
+  const all = DATA.big_files || [];
+  m.innerHTML = tabsHtml() + `<div class="toolbar"><div class="crumbs"><span class="here">Biggest files</span><span class="muted" style="margin-left:8px">${all.length ? all.length + " files ≥ " + esc(fmtSize(Math.min(...all.map((x) => x.size || 0)))) + " · " + esc(fmtSize(all.reduce((s, x) => s + (x.size || 0), 0))) + " in total" : ""}</span></div>${toolsHtml(false)}</div><div id="tablewrap" class="tablewrap"></div>`;
+  bindTools(renderBigTable);
+  renderBigTable();
+}
+function renderBigTable() {
+  const list = bigRows();
+  const st = SORT.big;
+  if (st.k === "name") list.sort((a, b) => st.d * baseName(a.e.path).localeCompare(baseName(b.e.path)));
+  else if (st.k === "root") list.sort((a, b) => st.d * a.rootLabel.localeCompare(b.rootLabel) || b.e.size - a.e.size);
+  else if (st.k === "mtime") list.sort((a, b) => st.d * ((a.e.mtime || 0) - (b.e.mtime || 0)));
+  else list.sort((a, b) => st.d * ((a.e.size || 0) - (b.e.size || 0)));
+  renderRows(list, list.length ? Math.max(...list.map((r) => r.e.size || 0)) : 0,
+             (DATA.big_files || []).length ? "Nothing matches the filter" : "No big files in this scan (needs a full v2 scan).", bigRowHtml, BIG_COLS, st);
+}
+
+// ---------- git repos tab ----------
+const GIT_COLS = [["name", "Repository"], ["size", ".git size", "num"], ["packs", "Packs", "num"], ["largest", "Largest pack", "num"], ["garbage", "Garbage", "num"], ["loose", "Loose objects", "num"], ["prunable", "Prunable worktrees", "num"], ["commit", "Last commit"]];
+function repoActions(g) {
+  const gd = g.git_dir || g.repo || (g.path ? g.path + "/.git" : null);
+  if (g.actions && g.actions.length) return { path: gd || g.path, descs: g.actions };
+  for (const p of [gd, g.path].filter(Boolean)) {   // older entries: descriptors only on the tree node
+    const loc = locate(p);
+    if (loc && loc.node && loc.node.actions && loc.node.actions.length) return { path: p, descs: loc.node.actions };
+  }
+  return { path: gd || g.path, descs: [] };
+}
+function gitRows() {
+  const q = filterText.toLowerCase();
+  return (DATA.git_repos || []).filter((g) => !q || (g.path || "").toLowerCase().includes(q)).map((g) => {
+    const ra = repoActions(g);
+    return { g, n: { path: g.path, name: baseName(g.path), size: g.size || 0 }, apath: ra.path, descs: ra.descs, git: true };
+  });
+}
+function gitRowHtml(r, i) {
+  const g = r.g;
+  const pw = g.prunable_worktrees || [];
+  const gfiles = g.garbage_files || [];
+  const gcount = g.garbage_count != null ? g.garbage_count : gfiles.length;
+  const run = (g.gc_running ? `<span class="badge run">gc running</span>` : "") + (g.fetch_running ? `<span class="badge run">fetch running</span>` : "");
+  const job = JOBS.find((j) => j.state === "running" && (j.path === r.apath || j.path === g.path));
+  let h = `<tr data-i="${i}" class="drill" tabindex="0">
+    <td><div class="name"><div class="n1"><span class="ico">⎇</span><span class="t" title="${esc(tilde(g.path))}">${esc(baseName(g.path))}</span>${g.bare ? '<span class="badge">bare</span>' : ""}${run}${job ? `<span class="badge run">${esc(job.label || job.action)} running</span>` : ""}</div><div class="reason mono">${esc(tilde(g.path))}</div></div></td>
+    <td class="num"><b>${esc(fmtSize(g.size))}</b></td>
+    <td class="num">${esc(fmtNum(g.packs))}${g.pack_size != null ? `<div class="faint">${esc(fmtSize(g.pack_size))}</div>` : ""}</td>
+    <td class="num">${esc(fmtSize(g.largest_pack))}</td>
+    <td class="num" title="${esc((g.garbage_old_files != null ? fmtNum(g.garbage_old_files) + " file(s), " + fmtSize(g.garbage_old_size || 0) + " older than 10 min (deletable now)\n" : "") + gfiles.slice(0, 30).join("\n") + (gfiles.length > 30 ? "\n…" : ""))}">${g.garbage_size ? `<b style="color:var(--caution)">${esc(fmtSize(g.garbage_size))}</b>` : esc(fmtSize(g.garbage_size || 0))}<div class="faint">${esc(fmtNum(gcount))} file${gcount === 1 ? "" : "s"}</div></td>
+    <td class="num"${g.loose_estimated ? ' title="estimated from a sample"' : ""}>${g.loose_estimated && g.loose_size != null ? "~" : ""}${esc(fmtSize(g.loose_size))}<div class="faint">${esc(fmtNum(g.loose_count))}</div></td>
+    <td class="num" ${pw.length ? `title="${esc(pw.map(tilde).join("\n"))}"` : ""}>${esc(fmtNum(pw.length))}${g.worktrees != null ? `<div class="faint">of ${esc(fmtNum(g.worktrees))}</div>` : ""}</td>
+    <td class="muted" title="${g.last_commit ? esc(new Date(g.last_commit * 1000).toLocaleString()) : ""}">${esc(ago(g.last_commit))}</td></tr>`;
+  const descs = r.descs || [];
+  h += `<tr class="actrow"><td colspan="${GIT_COLS.length}"><div class="actbtns">` + (descs.length ? descs.map((d) =>
+    `<button type="button" class="actbtn ${esc(d.safety || "")}" data-act="action" data-row="${i}" data-aid="${esc(d.id)}"${d.blocked || job ? " disabled" : ""} title="${esc(d.blocked ? "Blocked: " + d.blocked : job ? "Another action is running" : d.confirm || "")}">
+      <span class="al">${esc(d.label || d.id)}</span><span class="as">${esc(freesTxt(d))}${d.background ? " · runs in background" : ""}</span>${d.blocked ? `<span class="blockmsg">Blocked: ${esc(d.blocked)}</span>` : ""}</button>`).join("")
+    : `<span class="faint">No cleanup actions for this repository.</span>`) + `</div></td></tr>`;
+  return h;
+}
+function renderGit(m) {
+  const repos = DATA.git_repos || [];
+  const garbage = repos.reduce((s, g) => s + (g.garbage_size || 0), 0);
+  m.innerHTML = tabsHtml() + `<div class="toolbar"><div class="crumbs"><span class="here">Git repositories</span><span class="muted" style="margin-left:8px">${repos.length ? repos.length + " repos · .git total " + esc(fmtSize(repos.reduce((s, g) => s + (g.size || 0), 0))) + (garbage ? " · " + esc(fmtSize(garbage)) + " garbage" : "") : ""}</span></div>${toolsHtml(false)}</div>
+    <div id="tablewrap" class="tablewrap"></div><div class="jobs" id="jobs"></div>`;
+  bindTools(renderGitTable);
+  renderGitTable();
+  renderJobs();
+}
+function renderGitTable() {
+  const list = gitRows();
+  const st = SORT.git;
+  const v = (r) => { const g = r.g; switch (st.k) {
+    case "name": return baseName(g.path).toLowerCase(); case "packs": return g.packs || 0; case "largest": return g.largest_pack || 0;
+    case "garbage": return g.garbage_size || 0; case "loose": return g.loose_size || 0; case "prunable": return (g.prunable_worktrees || []).length;
+    case "commit": return g.last_commit || 0; default: return g.size || 0; } };
+  list.sort((a, b) => { const x = v(a), y = v(b); return st.d * (typeof x === "string" ? x.localeCompare(y) : x - y); });
+  renderRows(list, 0, (DATA.git_repos || []).length ? "Nothing matches the filter" : "No git repositories found in this scan (needs a full v2 scan).", gitRowHtml, GIT_COLS, st);
+}
+function renderJobs() {
+  const el = $("#jobs");
+  if (!el) return;
+  if (view === "git") {
+    // refresh the action buttons' running/disabled state without losing scroll position
+    const tw = $("#tablewrap"); if (tw && DATA && rows.length && rows[0].git) { const s = $("#main").scrollTop; renderGitTable(); $("#main").scrollTop = s; }
+  }
+  if (!JOBS.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<h3 style="margin:0 0 8px;font-size:13px">Actions</h3>` + JOBS.slice(0, 10).map((j) => {
+    const dur = j.finished_at ? fmtDuration(j.finished_at - j.started_at) : fmtDuration(Date.now() / 1000 - j.started_at);
+    return `<div class="job"><div class="jh"><span class="pill ${esc(j.state)}">${j.state === "running" ? "running" : j.state === "done" ? "done" : "failed"}</span><b>${esc(j.label || j.action)}</b><span class="mono muted">${esc(tilde(j.path))}</span><span class="spacer"></span>
+      <span class="muted">${esc(ago(j.started_at))} · ${esc(dur)}</span>${j.freed ? `<span style="color:var(--safe)">freed ${esc(fmtSize(j.freed))}</span>` : ""}${j.rescan && j.rescan.length ? `<span class="muted">rescan: ${esc(j.rescan.join(", "))}</span>` : ""}</div>
+      ${j.error ? `<div class="err" style="color:var(--danger);padding:0 10px 6px">${esc(j.error)}</div>` : ""}${j.warning ? `<div style="color:var(--caution);padding:0 10px 6px">${esc(j.warning)}</div>` : ""}
+      ${j.output_tail ? `<pre class="mono" data-job="${esc(j.id)}">${esc(j.output_tail)}</pre>` : ""}</div>`;
+  }).join("");
+  el.querySelectorAll("pre").forEach((p) => { p.scrollTop = p.scrollHeight; });
+}
+
+// ---------- navigation ----------
+function drill(n) {
+  const t = drillTarget(n);
+  if (!t || !isDrillable(n)) return false;
+  if (rootByPath.get(t.path) === t && !nav.length) nav = [t];
+  else nav.push(t);
+  showAll = false;
+  renderMain(); renderSidebar();
+  $("#main").scrollTop = 0;
+  return true;
+}
+function goUp() {
+  if (view !== "folders") return;
+  if (!nav.length) { if (groupFilter) { groupFilter = null; renderMain(); renderSidebar(); } return; }
+  nav.pop(); showAll = false; renderMain(); renderSidebar();
+}
+function showInContext(r) {
+  // navigate to the parent of an item and highlight it
+  const chain = r.chain.filter((x) => x && x.children !== undefined);
+  const parentChain = r.n === chain[chain.length - 1] ? chain.slice(0, -1) : chain;
+  nav = parentChain.filter((x) => x.children && x.children.length);
+  groupFilter = null;
+  view = "folders"; showAll = true;
+  renderMain(); renderSidebar();
+  const idx = rows.findIndex((x) => x.n.path === r.n.path);
+  if (idx >= 0) { const tr = document.querySelector(`#tablewrap tr[data-i="${idx}"]`); if (tr) { tr.classList.add("flash"); tr.scrollIntoView({ block: "center" }); tr.focus(); } }
+  else toast("This item is deeper than the scan depth; showing its closest measured folder.");
+}
+function showPath(path) {
+  const loc = locate(path);
+  if (!loc) return;
+  const n = loc.node || { path, name: baseName(path) };
+  showInContext({ n, chain: loc.node ? loc.chain : loc.chain.concat([n]) });
+}
+
+// ---------- trash / reveal / actions ----------
+async function reveal(n) {
+  const j = await api("POST", "/api/reveal", { path: n.path });
+  if (!j.ok) toast(j.error || "Could not reveal", true);
+}
+function showModal(html, state) {
+  modalState = state;
+  $("#modal").innerHTML = html;
+  $("#modal-bg").classList.add("on");
+  $("#m-cancel").onclick = closeModal;
+  const ok = $("#m-ok");
+  if (ok) ok.onclick = () => state.ok();
+  const ack = $("#m-ack"), typ = $("#m-type");
+  if (ack) ack.onchange = updateModal;
+  if (typ) typ.oninput = updateModal;
+  updateModal();
+  (typ || ack || (ok && !ok.disabled ? ok : $("#m-cancel"))).focus();
+}
+function openTrash(r) {
+  const n = r.n, eff = r.eff, a = (eff && eff.app) || null;
+  const block = trashBlock(n, eff, r.chain);
+  const safety = n.safety || "unknown";
+  const appTxt = a ? `${esc(a.name)}${a.version ? " " + esc(a.version) : ""}${a.installed === false ? " — not installed" : ""}${a.running ? " — <b>running</b>" : ""}` : `<span class="faint">unknown</span>`;
+  let confirm = "";
+  if (safety === "caution") confirm = `<label class="confirm"><input type="checkbox" id="m-ack"> I understand this may contain data I still need (settings, documents, sign-ins).</label>`;
+  else if (safety === "danger") confirm = `<div class="confirm danger"><b>Marked dangerous.</b> This probably holds data you cannot regenerate. Type the name <b class="mono">${esc(n.name)}</b> to confirm:<input type="text" id="m-type" autocomplete="off" spellcheck="false" aria-label="Type the name to confirm"></div>`;
+  const state = { type: "trash", r, block, safety, busy: false, ok: doTrash };
+  state.ready = () => {
+    if (state.block || state.busy) return false;
+    if (safety === "caution") return !!($("#m-ack") && $("#m-ack").checked);
+    if (safety === "danger") return !!($("#m-type") && $("#m-type").value.trim() === n.name);
+    return true;
+  };
+  showModal(`<h2 id="m-title">Move to Trash?</h2>
+    <dl><dt>Path</dt><dd class="mono">${esc(tilde(n.path))}</dd>
+    <dt>Size</dt><dd><b>${esc(fmtSize(n.size))}</b>${n.files != null && n.is_dir !== false ? " · " + esc(fmtNum(n.files)) + " files" : ""}</dd>
+    <dt>App</dt><dd>${appTxt}</dd>
+    ${n.kind ? `<dt>Kind</dt><dd>${kindBadge(n.kind)}</dd>` : ""}
+    <dt>Safety</dt><dd>${n.safety ? `<span class="pill ${esc(n.safety)}">${esc(n.safety)}</span>` : "not assessed"}</dd>
+    ${n.reason ? `<dt>Why</dt><dd>${esc(n.reason)}</dd>` : ""}</dl>
+    ${block ? `<div class="err">${esc(block)}</div>` : confirm}
+    <div class="err" id="m-err"></div>
+    <div class="note">Items go to the Trash via Finder, so you can use “Put Back”. Space is freed only when you empty the Trash.</div>
+    <div class="btns"><button type="button" id="m-cancel">Cancel</button><button type="button" id="m-ok" class="${safety === "danger" ? "danger" : "primary"}">Move to Trash</button></div>`, state);
+}
+function updateModal() { const b = $("#m-ok"); if (b && modalState) b.disabled = !modalState.ready(); }
+function closeModal() { $("#modal-bg").classList.remove("on"); modalState = null; }
+async function doTrash() {
+  const s = modalState;
+  if (!s || !s.ready()) return;
+  s.busy = true; updateModal();
+  $("#m-ok").textContent = "Moving…";
+  const j = await api("POST", "/api/trash", { path: s.r.n.path, force: s.safety === "danger" });
+  if (!j.ok) {
+    s.busy = false; $("#m-ok").textContent = "Move to Trash"; updateModal();
+    $("#m-err").textContent = j.error || "Failed";
+    return;
+  }
+  closeModal();
+  toast(`Moved to Trash — ${fmtSize(j.freed)} will be freed when you empty the Trash.${j.method === "rename" ? " (Moved without Finder: “Put Back” is not available.)" : ""}${j.warning ? " " + j.warning : ""}`);
+  await loadScan();
+}
+function openChooser(path, descs, title) {
+  const state = { type: "choose", ready: () => false, ok: () => {} };
+  showModal(`<h2 id="m-title">Clean up ${esc(title)}</h2><p class="muted mono" style="margin-top:-6px">${esc(tilde(path))}</p>` +
+    descs.map((d, i) => `<div class="choice"><div><b>${esc(d.label || d.id)}</b> <span class="pill ${esc(d.safety || "")}">${esc(d.safety || "")}</span><div class="muted">${esc(freesTxt(d))}${d.background ? " · runs in background" : ""}</div>${d.blocked ? `<div class="blockmsg">Blocked: ${esc(d.blocked)}</div>` : ""}</div>
+      <button type="button" class="small${d.blocked ? "" : " primary"}" data-choose="${i}"${d.blocked ? ` disabled title="${esc(d.blocked)}"` : ""}>Choose…</button></div>`).join("") +
+    `<div class="btns"><button type="button" id="m-cancel">Close</button></div>`, state);
+  $("#modal").querySelectorAll("[data-choose]").forEach((b) => b.onclick = () => openAction(path, descs[+b.dataset.choose], title));
+}
+function openAction(path, d, title) {
+  const state = { type: "action", path, d, busy: false };
+  const needAck = d.safety === "caution";
+  state.ready = () => !d.blocked && !state.busy && (!needAck || !!($("#m-ack") && $("#m-ack").checked));
+  state.ok = () => doAction(state);
+  showModal(`<h2 id="m-title">${esc(d.label || d.id)}</h2>
+    <dl><dt>Repository</dt><dd class="mono">${esc(tilde(path))}</dd>
+    <dt>Frees</dt><dd><b>${d.frees ? (d.frees_estimated ? "up to ~" : "~") + esc(fmtSize(d.frees)) : "little or nothing"}</b>${d.frees_estimated ? ' <span class="muted">(estimate)</span>' : ""}</dd>
+    ${d.needs_free != null ? `<dt>Needs</dt><dd>${esc(fmtSize(d.needs_free))} free while running${d.free != null ? ` · <span class="${d.free < d.needs_free ? "" : "muted"}">${esc(fmtSize(d.free))} free now</span>` : ""}</dd>` : ""}
+    <dt>Safety</dt><dd>${d.safety ? `<span class="pill ${esc(d.safety)}">${esc(d.safety)}</span>` : "—"}</dd>
+    <dt>Runs</dt><dd>${d.background ? "in the background — live output appears in the Git repos tab" : "immediately"}</dd></dl>
+    ${d.confirm ? `<div class="confirm">${esc(d.confirm)}</div>` : ""}
+    ${d.blocked ? `<div class="err">Blocked: ${esc(d.blocked)}</div>` : needAck ? `<label class="confirm"><input type="checkbox" id="m-ack"> I understand what this does.</label>` : ""}
+    <div class="err" id="m-err"></div>
+    <div class="note">This is not Move to Trash: the space is freed directly. LibraryLens re-checks everything before running and rescans the affected location afterwards.</div>
+    <div class="btns"><button type="button" id="m-cancel">Cancel</button><button type="button" id="m-ok" class="primary">${d.background ? "Start" : "Run"}</button></div>`, state);
+}
+async function doAction(s) {
+  if (!s.ready()) return;
+  s.busy = true; updateModal();
+  $("#m-ok").textContent = "Running…";
+  const j = await api("POST", "/api/action", { path: s.d.path || s.path, action: s.d.id, confirm: true });
+  if (!j.ok) {
+    s.busy = false; $("#m-ok").textContent = s.d.background ? "Start" : "Run"; updateModal();
+    $("#m-err").textContent = j.error || "Failed";
+    if (j.job) pollJobs();
+    return;
+  }
+  closeModal();
+  if (j.background) {
+    toast(`${s.d.label || s.d.id} started — output below.`);
+    view = "git"; renderMain(); renderSidebar();
+    pollJobs();
+  } else {
+    toast(`${s.d.label || s.d.id}: done${j.freed ? " — freed " + fmtSize(j.freed) : ""}.${j.warning ? " " + j.warning : ""}`);
+    await pollJobs(); await loadScan(); schedulePoll(300);
+  }
+}
+
+// ---------- events ----------
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  const go = t.closest("[data-go]");
+  if (go) { view = go.dataset.go; renderMain(); renderSidebar(); return; }
+  const vb = t.closest("[data-view]");
+  if (vb) { view = vb.dataset.view; showAll = false; if (view === "disk") loadDisk(); if (view === "git") pollJobs(); renderMain(); renderSidebar(); return; }
+  const sb = t.closest("#sidebar [data-root]");
+  if (sb) {
+    const i = sb.dataset.root;
+    if (i === "") { nav = []; groupFilter = null; view = "folders"; showAll = false; renderMain(); renderSidebar(); }
+    else goRoot(DATA.roots[+i]);
+    return;
+  }
+  const gb = t.closest("[data-group]");
+  if (gb) { goGroup(gb.dataset.group); return; }
+  const rs = t.closest("[data-rescan]");
+  if (rs) { startScan([rs.dataset.rescan]); return; }
+  const sg = t.closest("[data-seg]");
+  if (sg) { segClick(+sg.dataset.seg); return; }
+  const sk = t.closest("[data-seg-key]");
+  if (sk) { diskSel = sk.dataset.segKey; renderMain(); flashCard("#card-unacc"); return; }
+  const lc = t.closest("[data-loc]");
+  if (lc) { showPath(lc.dataset.loc); return; }
+  const th = t.closest("th[data-sort]");
+  if (th) { toggleSort(th.dataset.sort); return; }
+  const tr = t.closest("#tablewrap tbody tr[data-i], #tablewrap tbody tr.actrow");
+  if (tr) {
+    const btn = t.closest("button[data-act]");
+    const r = rows[btn && btn.dataset.row != null ? +btn.dataset.row : +tr.dataset.i];
+    if (!r) return;
+    if (btn) {
+      const act = btn.dataset.act;
+      if (act === "reveal") reveal(r.n);
+      else if (act === "trash") openTrash(r);
+      else if (act === "goroot") { const lr = rootByLabel(r.n.link_root); if (lr) goRoot(lr); }
+      else if (act === "rescan") startScan([r.n.label]);
+      else if (act === "actions") openChooser(r.n.path, r.n.actions || [], r.n.name);
+      else if (act === "action") {
+        const descs = r.git ? r.descs : r.action ? [r.action] : (r.n.actions || []);
+        const d = descs.find((x) => x.id === btn.dataset.aid);
+        if (d) openAction(r.git ? r.apath : r.n.path, d, r.n.name);
+      }
+      return;
+    }
+    if (tr.classList.contains("actrow")) return;
+    if (r.n.synthetic) return;
+    if (r.n.link_root) { const lr = rootByLabel(r.n.link_root); if (lr) goRoot(lr); return; }
+    if (r.top || r.big) { showInContext(r); return; }
+    if (r.git) { showPath(r.g.path); return; }
+    drill(r.n);
+    return;
+  }
+  const cell = t.closest(".tm-cell");
+  if (cell) {
+    const rr = tmRects[+cell.dataset.i];
+    if (!rr) return;
+    const n = rr.it.n;
+    if (!drill(n)) {
+      const idx = rows.findIndex((x) => x.n === n);
+      if (idx >= 0) { const row = document.querySelector(`#tablewrap tr[data-i="${idx}"]`); if (row) { row.classList.add("flash"); row.scrollIntoView({ block: "nearest" }); setTimeout(() => row.classList.remove("flash"), 1200); } }
+    }
+    return;
+  }
+  if (t.id === "modal-bg") closeModal();
+});
+function toggleSort(k) {
+  const st = SORT[view] || SORT.folders;
+  if (st.k === k) st.d = -st.d; else { st.k = k; st.d = (k === "name" || k === "app" || k === "safety" || k === "root") ? 1 : -1; }
+  if (view === "top") renderTop(); else if (view === "big") renderBigTable(); else if (view === "git") renderGitTable(); else renderTable();
+}
+document.addEventListener("mousemove", (e) => {
+  const tip = $("#tip");
+  const cell = e.target.closest && e.target.closest(".tm-cell");
+  if (!cell) { tip.style.display = "none"; return; }
+  const rr = tmRects[+cell.dataset.i];
+  if (!rr) return;
+  if (tip._i !== cell.dataset.i || tip.style.display === "none") {
+    tip.innerHTML = tipHtml(rr.it.n, current().size, effectiveApp(navChain().concat([rr.it.n])));
+    tip._i = cell.dataset.i;
+    tip.style.display = "block";
+  }
+  placeTip(e);
+});
+document.addEventListener("mouseleave", () => { $("#tip").style.display = "none"; });
+document.addEventListener("keydown", (e) => {
+  if ($("#modal-bg").classList.contains("on")) {
+    if (e.key === "Escape") { e.preventDefault(); closeModal(); }
+    else if (e.key === "Enter" && e.target.id !== "m-cancel" && modalState && modalState.type !== "choose" && !(e.target.dataset && e.target.dataset.choose)) { e.preventDefault(); modalState.ok(); }
+    return;
+  }
+  const tag = (e.target.tagName || "").toLowerCase();
+  const typing = tag === "input" || tag === "textarea" || tag === "select";
+  if (typing) { if (e.key === "Escape" && e.target.id === "filter") { e.target.value = ""; e.target.dispatchEvent(new Event("input")); e.target.blur(); } return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "Backspace" || e.key === "ArrowLeft") { if (view === "folders") { e.preventDefault(); goUp(); } return; }
+  if (e.key === "/") { const f = $("#filter"); if (f) { e.preventDefault(); f.focus(); } return; }
+  if (e.key === "Enter" || e.key === "ArrowRight") {
+    if (tag === "button") return;
+    const th = e.target.closest && e.target.closest("th[data-sort]");
+    if (th && e.key === "Enter") { toggleSort(th.dataset.sort); return; }
+    const lc = e.target.closest && e.target.closest("[data-loc]");
+    if (lc) { e.preventDefault(); showPath(lc.dataset.loc); return; }
+    const tr = e.target.closest && e.target.closest("#tablewrap tbody tr[data-i]");
+    if (tr) {
+      const r = rows[+tr.dataset.i];
+      if (!r || r.n.synthetic) return;
+      e.preventDefault();
+      if (r.n.link_root) { const lr = rootByLabel(r.n.link_root); if (lr) goRoot(lr); }
+      else if (r.top || r.big) showInContext(r);
+      else if (r.git) showPath(r.g.path);
+      else drill(r.n);
+    }
+    return;
+  }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const tr = e.target.closest && e.target.closest("#tablewrap tbody tr");
+    const all = Array.from(document.querySelectorAll("#tablewrap tbody tr[tabindex]"));
+    if (!all.length) return;
+    e.preventDefault();
+    let i = tr ? all.indexOf(tr) : -1;
+    i = e.key === "ArrowDown" ? Math.min(all.length - 1, i + 1) : Math.max(0, i - 1);
+    all[i].focus();
+  }
+});
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderTreemap, 120); });
+$("#btn-rescan").onclick = () => startScan();
+$("#btn-cancel").onclick = cancelScan;
+setInterval(() => { if (DATA) renderHeader(); }, 60000);
+
+(async function init() {
+  await Promise.all([loadScan(), pollStatus(), pollJobs()]);
+  if (DATA) loadDisk();
+})();
+</script>
+</body>
+</html>
