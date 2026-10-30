@@ -265,7 +265,8 @@ Actions:
   caution, never candidates ("personal data — move to an external drive instead");
   `vm` → caution, candidate only if `last_used` older than stale_days; `disk_image` in Downloads → safe
   candidate if stale; `build_output` → safe + `regenerable`, candidate if project mtime older than
-  stale_days (else not, "project is active"); `git_dir` → danger for trash (use the git actions);
+  stale_days (else not, "project is active"), except in installed software (`installed`/app-data
+  categories, hidden home folders, `*.app` bundles), where the category rules apply; `git_dir` → danger for trash (use the git actions);
   `applications`/`system` categories → danger.
 - Actions count toward reclaimable: `summary["actions_reclaimable"]` = sum of `frees` of unblocked
   actions; `summary["reclaimable"]` includes it (no overlap with trash candidates: a git_dir is never a

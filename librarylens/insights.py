@@ -38,6 +38,10 @@ BASE_SAFETY: Dict[str, str] = {
 }
 # dev_cache roots that hold installed software rather than caches (rule category "installed").
 INSTALL_ROOTS = ("/opt", "/usr/local")
+# Categories where build-output-looking folders (node_modules, dist, ...) ship with installed software
+# (global npm packages, app data) instead of being rebuilt by the user: the category rules apply there,
+# not the build_output kind. Hidden home folders (editor extensions) and app bundles are handled too.
+INSTALLED_BUILD_CATEGORIES = frozenset({"installed", "app_support", "container", "group_container"})
 TOP_N = 20
 DAY = 86400.0
 
@@ -255,6 +259,13 @@ def compute_flags(node: Node, app: Optional[dict], category: str, cutoff: float,
         if t and t < cutoff:
             flags.append("stale")
     return flags
+
+
+def is_installed_build(path: str, category: str, top: str) -> bool:
+    """A build-output-looking folder that is part of installed software, e.g. /usr/local/lib/node_modules,
+    ~/.vscode/extensions/<ext>/node_modules or <IDE>.app/Contents/.../node_modules."""
+    return (category in INSTALLED_BUILD_CATEGORIES or (category == "home" and top.startswith("."))
+            or ".app/" in path)
 
 
 def bump(safety: str) -> str:
@@ -813,8 +824,10 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
             own_kind = None if node.get("synthetic") else node.get("kind")
             if own_kind:
                 kind_nodes.append(node)
-                # repos/build dirs inside caches (Cargo git db, Bazel externals) stay cache
-                if not (own_kind in CODE_KINDS and cat in REGENERABLE_CATEGORIES):
+                # repos/build dirs inside caches (Cargo git db, Bazel externals) stay cache;
+                # build dirs of installed software (global npm, extensions) stay installed software
+                if not (own_kind in CODE_KINDS and cat in REGENERABLE_CATEGORIES) and not (
+                        own_kind == "build_output" and is_installed_build(node.get("path") or "", cat, top)):
                     kind, knode = own_kind, node
             flags, safety, reason, in_use = assess(node, depth, app, cat, ctx, cutoff, now,
                                                    kind, knode, top)

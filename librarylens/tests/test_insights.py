@@ -668,6 +668,42 @@ class InsightsV2Test(unittest.TestCase):
                       self.f("/Library/Developer/CommandLineTools")["reason"])
         self.assertIn("shrinks after a restart", self.f("/private/var/vm/sleepimage")["reason"])
 
+    def test_build_dirs_of_installed_software(self) -> None:
+        # node_modules/dist that ship with installed software must not become "safe, regenerable"
+        def bo(path: str) -> dict:
+            return n(path, 1 * G, mtime=OLD, kind="build_output",
+                     details={"project": path.rsplit("/", 1)[0], "project_mtime": OLD})
+        ext = f"{H}/.vscode/extensions/ms-python.python-2025.1"
+        ws = f"{H}/Applications/WebStorm.app/Contents/plugins/js"
+        code = f"{AS}/Code/User/globalStorage/ext"
+        site = f"{H}/work/site/node_modules"
+        vscode = app("Visual Studio Code")
+        r = {"home": H, "roots": [
+            root("Home", "home", n(H, 6 * G, children=[
+                n(f"{H}/.vscode", 2 * G, mtime=OLD, app=vscode,
+                  children=[bo(f"{ext}/node_modules"), bo(f"{ext}/dist")]),
+                n(f"{H}/Applications", 1 * G, mtime=OLD, children=[bo(f"{ws}/node_modules")]),
+                n(f"{H}/work", 1 * G, mtime=OLD, children=[bo(site)]),  # a real project: still a candidate
+            ])),
+            root("/usr/local", "dev_cache", n("/usr/local", 1 * G, mtime=OLD, children=[
+                n("/usr/local/lib", 1 * G, mtime=OLD, children=[bo("/usr/local/lib/node_modules")])])),
+            root("/opt", "dev_cache", n("/opt", 1 * G, mtime=OLD, children=[
+                n("/opt/homebrew", 1 * G, mtime=OLD, app=app("Homebrew", kind="cli"),
+                  children=[bo("/opt/homebrew/lib/node_modules")])])),
+            root("Application Support", "app_support", n(AS, 1 * G, mtime=OLD, children=[
+                n(f"{AS}/Code", 1 * G, mtime=OLD, app=vscode, children=[bo(f"{code}/node_modules")])])),
+        ]}
+        insights.annotate(r, stale_days=90, now=NOW)
+        cands = {c["path"] for c in r["summary"]["top_candidates"] if "action" not in c}
+        self.assertEqual(cands, {site})
+        self.assertEqual(find(r, site)["safety"], "safe")
+        for p in (f"{ext}/node_modules", f"{ext}/dist", f"{ws}/node_modules", "/usr/local/lib/node_modules",
+                  "/opt/homebrew/lib/node_modules", f"{code}/node_modules"):
+            x = find(r, p)
+            self.assertNotEqual(x["safety"], "safe", p)
+            self.assertNotIn("regenerable", x["flags"], p)
+            self.assertNotIn("Build output", x["reason"], p)
+
     def test_installed_software(self) -> None:
         hb = self.f("/opt/homebrew")
         self.assertEqual(hb["safety"], "caution")
