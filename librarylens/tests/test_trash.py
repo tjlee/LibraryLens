@@ -129,6 +129,21 @@ class TrashTest(unittest.TestCase):
             self.assertIn("git cleanup actions", res["error"])
         self.assertTrue(os.path.exists(tmp))
 
+    @unittest.skipUnless(os.path.isdir(os.path.join(HOME, "LIBRARY")), "case-sensitive filesystem")
+    def test_rejects_case_variants(self) -> None:
+        # validate() only: with a broken guard, move_to_trash would really trash ~/Library
+        variant = os.path.join(os.path.dirname(self.root), os.path.basename(self.root).upper())
+        repo = os.path.join(self.root, "repo-" + self.tag)
+        os.makedirs(os.path.join(repo, ".git", "objects"))
+        for p, roots, msg in ((os.path.join(HOME, "library"), [HOME], "protected"),
+                              (os.path.join(HOME, "LIBRARY"), ["/", HOME], "protected"),
+                              (os.path.join(HOME, ".TRASH"), [HOME], "protected"),
+                              (variant, [os.path.dirname(self.root), self.root], "scan root"),
+                              (os.path.join(repo, ".GIT", "objects"), [self.root], "git cleanup actions")):
+            target, err = trash.validate(p, roots)
+            self.assertIsNone(target, p)
+            self.assertIn(msg, err, p)
+
     def test_rejects_symlink_escape(self) -> None:
         victim = os.path.join(self.outside, "victim-" + self.tag)
         os.makedirs(os.path.join(victim, "inner"))

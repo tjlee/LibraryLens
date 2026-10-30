@@ -10,6 +10,7 @@ import os
 import subprocess
 import threading
 import time
+import unicodedata
 from typing import Optional
 
 ACTIONS_LOG = os.path.expanduser("~/.librarylens/actions.log")
@@ -34,6 +35,12 @@ _FINDER_SCRIPT = [
 def _norm(p: str) -> str:
     p = os.path.normpath(p)
     return p
+
+
+def _fold(p: str) -> str:
+    """Comparison key for the refusal checks. APFS/HFS+ are case- and normalization-insensitive by
+    default, so '~/library' is '~/Library'. Folding only ever makes a refusal check stricter."""
+    return unicodedata.normalize("NFD", p).casefold()
 
 
 def _is_strictly_inside(child: str, parent: str) -> bool:
@@ -69,12 +76,12 @@ def validate(path: str, allowed_roots: list) -> tuple:
     target = os.path.join(os.path.realpath(os.path.dirname(path)), base)
     if not os.path.lexists(target):
         return None, "path does not exist"
-    if ".git" in path.split("/") or ".git" in target.split("/"):
+    if ".git" in _fold(path).split("/") or ".git" in _fold(target).split("/"):
         # Trashing git internals (a .git dir, its packs) breaks the repo and frees nothing until the
         # Trash is emptied; LibraryLens offers dedicated git cleanup actions instead.
         return None, "refusing to trash a .git folder or its contents; use the git cleanup actions"
-    forbidden = _forbidden_targets()
-    if path in forbidden or target in forbidden or os.path.realpath(target) in forbidden:
+    candidates = {_fold(p) for p in (path, target, os.path.realpath(target))}
+    if candidates & {_fold(p) for p in _forbidden_targets()}:
         return None, "refusing to trash a protected location"
     roots = []
     for r in allowed_roots or []:
@@ -82,7 +89,7 @@ def validate(path: str, allowed_roots: list) -> tuple:
             roots.append(os.path.realpath(r))
     if not roots:
         return None, "no allowed roots"
-    if target in roots or os.path.realpath(target) in roots:
+    if candidates & {_fold(r) for r in roots}:
         return None, "refusing to trash a scan root itself"
     if not any(_is_strictly_inside(target, r) for r in roots):
         return None, "path is outside the scanned locations"
