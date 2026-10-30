@@ -205,11 +205,36 @@ def _dir_alloc(path: str, limit: int = 20000) -> int:
     return total
 
 
+def _out_of_reach(path: str) -> bool:
+    """A path that does not look present but may only be out of reach right now: on a /Volumes drive
+    that is not mounted, or not checkable at all (permissions, macOS privacy protection)."""
+    try:
+        os.stat(path)
+        return False
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError:
+        return True
+    parts = path.split("/")
+    if len(parts) > 2 and parts[0] == "" and parts[1] == "Volumes":
+        return not os.path.ismount(os.path.realpath("/Volumes/" + parts[2]))
+    return False
+
+
+def _unreachable_reason(paths: List[str]) -> str:
+    n = len(paths)
+    return ("git worktree prune would also drop %d worktree%s on a disconnected drive or an unreadable "
+            "location (%s); connect the drive first, or protect %s with `git worktree lock`"
+            % (n, "" if n == 1 else "s", ", ".join(paths[:5]) + (", ..." if n > 5 else ""),
+               "it" if n == 1 else "them"))
+
+
 def worktrees(git_dir: str) -> dict:
     """Linked worktrees from ``<git_dir>/worktrees/*``; prunable = git's own rule (gitdir file missing,
-    or pointing to a non-existent location) unless the worktree is locked."""
+    or pointing to a non-existent location) unless the worktree is locked. Worktrees git would prune
+    that may only be out of reach (unmounted drive, unreadable) are listed as unreachable instead."""
     base = os.path.join(git_dir, "worktrees")
-    out = {"worktrees": 0, "prunable_worktrees": [], "prunable_size": 0}
+    out = {"worktrees": 0, "prunable_worktrees": [], "prunable_size": 0, "unreachable_worktrees": []}
     try:
         names = sorted(os.listdir(base))
     except OSError:
@@ -234,6 +259,9 @@ def worktrees(git_dir: str) -> dict:
             target = os.path.normpath(os.path.join(admin, target))
         if not target or not os.path.exists(target):
             wt = os.path.dirname(target) if target else admin
+            if target and _out_of_reach(target):
+                out["unreachable_worktrees"].append(wt)
+                continue
             out["prunable_worktrees"].append(wt)
             out["prunable_size"] += _dir_alloc(admin)
     return out
@@ -558,10 +586,12 @@ def available(node: dict) -> List[dict]:
     prunable = d.get("prunable_worktrees") or []
     if prunable:
         n = len(prunable)
+        unreachable = d.get("unreachable_worktrees") or []
         acts.append({
             "id": "git_worktree_prune", "path": path,
             "label": "Prune %d missing worktree%s" % (n, "" if n == 1 else "s"),
-            "frees": int(d.get("prunable_size") or 0), "safety": "safe", "blocked": None,
+            "frees": int(d.get("prunable_size") or 0), "safety": "safe",
+            "blocked": _unreachable_reason(unreachable) if unreachable else None,
             "background": False,
             "confirm": ("Run `git worktree prune -v` in %s? It removes git's bookkeeping for %d worktree%s "
                         "whose directories no longer exist (%s). Existing worktrees are not touched."
@@ -770,6 +800,9 @@ def _delete_temp_packs(git_dir: str, on_output) -> dict:
 
 def _worktree_prune(git_dir: str, on_output) -> dict:
     before = worktrees(git_dir)
+    if before["unreachable_worktrees"]:
+        # git prunes every worktree it cannot find; it has no way to skip these
+        return _result(False, _unreachable_reason(before["unreachable_worktrees"]))
     wt = worktree_of(git_dir)
     argv = ["git", "-C", wt, "worktree", "prune", "-v"]
     try:
