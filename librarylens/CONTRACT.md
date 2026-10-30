@@ -231,8 +231,9 @@ Sets on nodes (tree nodes at the matching path, if present) and builds `result["
   work tree (parent of a `git_dir`).
 - `node["details"]`: kind-specific dict, e.g. git: `{"repo","pack_size","packs","largest_pack",
   "loose_size","loose_count","garbage_size","garbage_files": [names],"prunable_worktrees": [paths],
-  "worktrees": n,"gc_running": bool,"fetch_running": bool,"last_commit": epoch|None}` (read the
+  "unreachable_worktrees": [paths],"worktrees": n,"gc_running": bool,"fetch_running": bool,"last_commit": epoch|None}` (read the
   filesystem directly: list `objects/pack`, `worktrees/*/gitdir` targets missing → prunable,
+  unless only out of reach (unmounted `/Volumes` drive, unreadable) → unreachable;
   `gc.pid`/`*.lock` → running; use `git` CLI only with timeouts, `-C`, never mutating);
   vm: `{"vm_name","last_used","snapshots": n}`; build_output: `{"project","project_mtime"}`.
 - `node["actions"]`: list of available actions (see below), only for kinds that have them.
@@ -255,7 +256,8 @@ Actions:
   10 min; file not open by any process (`lsof -t -- file...`, timeout); no `git fetch`/`index-pack`/
   `gc`/`repack` process with this repo (check `gc.pid` and `ps` + `lsof -t +D objects/pack`… keep it
   bounded). These files are never referenced by git, so deletion is safe; Trash would not free space.
-- `git_worktree_prune` — `git -C <worktree> worktree prune -v`.
+- `git_worktree_prune` — `git -C <worktree> worktree prune -v`; blocked if any worktree is unreachable
+  (git would prune it too).
 - `git_gc` — background `git -C <worktree> gc` with streamed progress; blocked if gc/fetch running or
   free space < largest pack × 1.2 (message says how much is needed and suggests deleting temp packs first).
 - `git_maintenance_off`? no. `docker_prune`? not now. Keep the list to the three above.
@@ -265,7 +267,8 @@ Actions:
   caution, never candidates ("personal data — move to an external drive instead");
   `vm` → caution, candidate only if `last_used` older than stale_days; `disk_image` in Downloads → safe
   candidate if stale; `build_output` → safe + `regenerable`, candidate if project mtime older than
-  stale_days (else not, "project is active"); `git_dir` → danger for trash (use the git actions);
+  stale_days (else not, "project is active"), except in installed software (`installed`/app-data
+  categories, hidden home folders, `*.app` bundles), where the category rules apply; `git_dir` → danger for trash (use the git actions);
   `applications`/`system` categories → danger.
 - Actions count toward reclaimable: `summary["actions_reclaimable"]` = sum of `frees` of unblocked
   actions; `summary["reclaimable"]` includes it (no overlap with trash candidates: a git_dir is never a

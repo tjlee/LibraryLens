@@ -345,6 +345,18 @@ class ServerTest(unittest.TestCase):
         self.assertIn("running", j["error"])
         self.assertEqual(self.stubs.trashed, [])
 
+    def test_trash_running_descendant_with_inherited_app_refused(self):
+        # the running node has no "app" of its own; that must not read as "nothing is running"
+        self.find(H + "/IdeaProjects/ultimate/out", "Home")["in_use"] = True
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate", "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("contains data of a running app", j["error"])
+        self.find(H + "/IdeaProjects", "Home")["app"] = JB_RUN
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate", "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("contains data of IntelliJ IDEA", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
     def test_trash_danger_requires_force(self):
         p = L + "/Caches/Danger"
         status, j = self.jreq("POST", "/api/trash", {"path": p})
@@ -687,6 +699,18 @@ class ServerTest(unittest.TestCase):
             status, j = self.jreq("POST", "/api/trash", {"path": p, "force": True})
             self.assertEqual(status, 409, p)
             self.assertIn("git cleanup actions", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
+    def test_trash_inside_bare_repo_below_tree_refused(self):
+        # a bare repo deeper than the tree: no '.git' component, no git_dir node, only a special entry
+        bare = H + "/IdeaProjects/mirrors/a/mirror.git"
+        pack = bare + "/objects/pack/pack-x.pack"
+        self.app.result["special"].append({"path": bare, "kind": "git_dir", "size": 1200, "files": 3,
+                                           "mtime": 1.0, "root": "Home"})
+        self.app.result["big_files"].append({"path": pack, "size": 1200, "mtime": 1.0, "root": "Home"})
+        status, j = self.jreq("POST", "/api/trash", {"path": pack, "force": True})
+        self.assertEqual(status, 409, j)
+        self.assertIn("git cleanup actions", j["error"])
         self.assertEqual(self.stubs.trashed, [])
 
     def test_trash_big_file_not_in_tree(self):

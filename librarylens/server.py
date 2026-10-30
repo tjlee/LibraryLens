@@ -353,14 +353,16 @@ class App:
         return best
 
     @staticmethod
-    def _running_in_subtree(node: dict) -> Optional[dict]:
-        stack = [node]
+    def _running_in_subtree(node: dict, app: Optional[dict] = None) -> Optional[dict]:
+        """The app of the first in-use node at/below ``node`` (inherited from the nearest node that has
+        one, starting from ``app``; ``{}`` if none has), or None if nothing in the subtree is in use."""
+        stack = [(node, app)]
         while stack:
-            n = stack.pop()
-            a = n.get("app")
+            n, inherited = stack.pop()
+            a = n.get("app") or inherited
             if n.get("in_use"):
                 return a or {}
-            stack.extend(n.get("children") or [])
+            stack.extend((c, a) for c in n.get("children") or [])
         return None
 
     def _remove_from_tree(self, path: str, size: int, files: int) -> None:
@@ -424,6 +426,15 @@ class App:
                     return e
         return None
 
+    @staticmethod
+    def _in_special_git_dir(r: dict, path: str) -> bool:
+        """Is ``path`` at/inside a ``special`` git_dir (found at any depth, so this also covers bare
+        repos deeper than the tree, whose paths have no '.git' component)?"""
+        for e in r.get("special") or []:
+            if isinstance(e, dict) and e.get("kind") == "git_dir" and _inside_or_equal(path, str(e.get("path") or "")):
+                return True
+        return False
+
     def _reannotate(self, r: dict) -> Optional[str]:
         """pipeline.reannotate (apps + detectors + insights + save); falls back to insights + save."""
         try:
@@ -473,7 +484,8 @@ class App:
                 ancestors = [n for ch in chains for n in ch if n.get("path") != path]
                 if (".git" in path.split("/") or (node or {}).get("kind") == "git_dir"
                         or (entry or {}).get("kind") == "git_dir"
-                        or any(a.get("kind") == "git_dir" for a in ancestors)):
+                        or any(a.get("kind") == "git_dir" for a in ancestors)
+                        or self._in_special_git_dir(r, path)):
                     raise ApiError(HTTPStatus.CONFLICT, GIT_TRASH_MSG, use_actions=True)
                 app = self._effective_app(path)
                 if (node or {}).get("in_use"):
@@ -484,8 +496,8 @@ class App:
                         raise ApiError(HTTPStatus.CONFLICT, "belongs to %s, which is running — quit it first"
                                        % ((a.get("app") or app or {}).get("name") or "an app"))
                 if node is not None:
-                    sub = self._running_in_subtree(node)
-                    if sub:
+                    sub = self._running_in_subtree(node, app)
+                    if sub is not None:
                         raise ApiError(HTTPStatus.CONFLICT, "contains data of %s, which is running — quit it first"
                                        % (sub.get("name") or "a running app"))
                     safety = node.get("safety")

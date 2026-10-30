@@ -10,6 +10,7 @@ import os
 import subprocess
 import threading
 import time
+import unicodedata
 from typing import Optional
 
 ACTIONS_LOG = os.path.expanduser("~/.librarylens/actions.log")
@@ -34,6 +35,31 @@ _FINDER_SCRIPT = [
 def _norm(p: str) -> str:
     p = os.path.normpath(p)
     return p
+
+
+def _fold(p: str) -> str:
+    """Comparison key for the refusal checks. APFS/HFS+ are case- and normalization-insensitive by
+    default, so '~/library' is '~/Library'. Folding only ever makes a refusal check stricter."""
+    return unicodedata.normalize("NFD", p).casefold()
+
+
+def _is_git_dir(p: str) -> bool:
+    """A ``.git`` dir or a bare repository (git's own test: HEAD, objects/ and refs/)."""
+    return (os.path.isfile(os.path.join(p, "HEAD")) and os.path.isdir(os.path.join(p, "objects"))
+            and os.path.isdir(os.path.join(p, "refs")))
+
+
+def _inside_git_dir(target: str) -> bool:
+    """Is ``target`` a git dir or inside one? Checked on disk, so bare repos deeper than the scan
+    depth (no '.git' in the path, no git_dir node in the tree) are caught too."""
+    p = target if os.path.isdir(target) and not os.path.islink(target) else os.path.dirname(target)
+    while True:
+        if _is_git_dir(p):
+            return True
+        parent = os.path.dirname(p)
+        if parent == p:
+            return False
+        p = parent
 
 
 def _is_strictly_inside(child: str, parent: str) -> bool:
@@ -69,12 +95,13 @@ def validate(path: str, allowed_roots: list) -> tuple:
     target = os.path.join(os.path.realpath(os.path.dirname(path)), base)
     if not os.path.lexists(target):
         return None, "path does not exist"
-    if ".git" in path.split("/") or ".git" in target.split("/"):
+    if (".git" in _fold(path).split("/") or ".git" in _fold(target).split("/")
+            or _inside_git_dir(target)):
         # Trashing git internals (a .git dir, its packs) breaks the repo and frees nothing until the
         # Trash is emptied; LibraryLens offers dedicated git cleanup actions instead.
         return None, "refusing to trash a .git folder or its contents; use the git cleanup actions"
-    forbidden = _forbidden_targets()
-    if path in forbidden or target in forbidden or os.path.realpath(target) in forbidden:
+    candidates = {_fold(p) for p in (path, target, os.path.realpath(target))}
+    if candidates & {_fold(p) for p in _forbidden_targets()}:
         return None, "refusing to trash a protected location"
     roots = []
     for r in allowed_roots or []:
@@ -82,7 +109,7 @@ def validate(path: str, allowed_roots: list) -> tuple:
             roots.append(os.path.realpath(r))
     if not roots:
         return None, "no allowed roots"
-    if target in roots or os.path.realpath(target) in roots:
+    if candidates & {_fold(r) for r in roots}:
         return None, "refusing to trash a scan root itself"
     if not any(_is_strictly_inside(target, r) for r in roots):
         return None, "path is outside the scanned locations"

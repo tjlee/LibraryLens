@@ -275,6 +275,28 @@ class WorktreePruneTest(Base):
         self.assertEqual(after["prunable_worktrees"], [])
         self.assertTrue(os.path.isdir(os.path.join(self.root, "wt2")))
 
+    def test_prune_blocked_by_worktree_on_unmounted_drive(self) -> None:
+        gd = make_repo(self.root)
+        repo = os.path.dirname(gd)
+        for name in ("wt1", "ext"):
+            git("-C", repo, "worktree", "add", "-q", os.path.join(self.root, name))
+        shutil.rmtree(os.path.join(self.root, "wt1"))
+        # as if "ext" lived on an external drive that is unplugged right now
+        vol = "/Volumes/librarylens-test-%s" % os.urandom(4).hex()
+        with open(os.path.join(gd, "worktrees", "ext", "gitdir"), "w") as f:
+            f.write(vol + "/ext/.git\n")
+        wt = actions.worktrees(gd)
+        self.assertEqual(wt["prunable_worktrees"], [os.path.join(self.root, "wt1")])
+        self.assertEqual(wt["unreachable_worktrees"], [vol + "/ext"])
+        det = dict(actions.list_pack_dir(gd), git_dir=gd, **wt)
+        acts = {a["id"]: a for a in actions.available({"kind": "git_dir", "path": gd, "details": det})}
+        self.assertIn("disconnected drive", acts["git_worktree_prune"]["blocked"])
+        res = actions.run("git_worktree_prune", gd, [self.root])
+        self.assertFalse(res["ok"])
+        self.assertIn("disconnected drive", res["error"])
+        for name in ("ext", "wt1"):
+            self.assertTrue(os.path.isdir(os.path.join(gd, "worktrees", name)), name)
+
 
 class GcTest(Base):
     def test_gc_blocked_when_free_space_insufficient(self) -> None:
