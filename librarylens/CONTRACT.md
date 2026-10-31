@@ -190,6 +190,9 @@ def scan_all(roots=None, max_depth=3, workers=8, progress=None, min_size=1<<20,
              big_file_min: int = 500 * 10**6, big_files_limit: int = 200) -> dict
 ```
 - Each Root gets `"scanned_at"` and `"duration_s"` (per-root rescan merges into `prev`).
+- Each walked non-nested Root gets `"shared_hardlinks"`: how many hard-linked files it counted that also
+  have links outside it. A partial rescan treats those as already counted (the inodes are kept in
+  memory per process), or rescans that root too when they are not known (e.g. `prev` from the cache).
 - `result["big_files"]`: up to `big_files_limit` largest regular files ≥ `big_file_min` across all roots,
   sorted desc: `{"path","size","mtime","root": label}` (collected during the walk, heap-based).
 - `result["special"]`: special directories found at ANY depth (outermost match only, i.e. don't record

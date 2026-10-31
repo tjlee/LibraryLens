@@ -38,6 +38,10 @@ _S_IFDIR = 0o040000
 _S_IFREG = 0o100000
 _S_IFLNK = 0o120000
 
+# root path -> (scanned_at, hard-linked inodes the root counted that also have links outside it), from
+# this process's scans; lets a partial rescan count those once (see scan_all). Not saved to the cache.
+_SHARED_LINKS: Dict[str, Tuple[float, frozenset]] = {}
+
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".librarylens")
 CACHE_FILE = os.path.join(CACHE_DIR, "scan.json")
 
@@ -368,12 +372,14 @@ class _RootCtx:
     """Per-root walk state shared by all work items of that root."""
 
     __slots__ = ("label", "dev", "seen", "exclude", "home_gradle", "ios_parent", "big",
-                 "specials", "pending", "t_end")
+                 "specials", "pending", "t_end", "links", "claimed")
 
     def __init__(self, label: str, dev: int, seen: set) -> None:
         self.label = label
         self.dev = dev
         self.seen = seen
+        self.links: Dict[Tuple[int, int], int] = {}    # hard-linked inode -> links met in this root
+        self.claimed: Dict[Tuple[int, int], int] = {}  # ... counted by this root -> st_nlink
         self.exclude: Dict[bytes, Dict[bytes, Optional[str]]] = {}  # parent -> {name: link label}
         self.home_gradle = b""
         self.ios_parent = b""
@@ -581,9 +587,11 @@ class _Walker:
         if nlink > 1:
             key = (rc.dev, ino)
             with self.lock:
+                rc.links[key] = rc.links.get(key, 0) + 1
                 if key in rc.seen:
                     return
                 rc.seen.add(key)
+                rc.claimed[key] = nlink
         p.size += b
         if isreg:
             p.files += 1
@@ -655,6 +663,7 @@ class _Walker:
                                              bulk["unpack"])
         lock = self.lock
         seen = rc.seen
+        links, claimed = rc.links, rc.claimed
         dev = rc.dev
         min_size = self.min_size
         rare_min = self.rare_min
@@ -707,9 +716,11 @@ class _Walker:
                 if lc > 1:
                     key = (dev, ino)
                     with lock:
+                        links[key] = links.get(key, 0) + 1
                         if key in seen:
                             continue
                         seen.add(key)
+                        claimed[key] = lc
                 size += b
                 isreg = typ == _VREG
                 if isreg:
@@ -1067,8 +1078,23 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
         else:
             to_scan.append(i)
 
-    walker = _Walker(max_depth, min_size, workers, big_file_min, big_files_limit, cancel)
+    # Hard links are counted once across non-nested roots via one shared set of inodes. A root copied
+    # from prev already counted its share, so seed the set with the hard-linked files it counted that
+    # also have links elsewhere; if that is no longer known (another process made prev), rescan it too.
     shared_seen: set = set()
+    for i in sorted(copied):
+        pr = copied[i]
+        if nested[i] or not to_scan or not pr.get("shared_hardlinks"):
+            continue
+        known = _SHARED_LINKS.get(roots[i]["path"])
+        if known is not None and known[0] == pr.get("scanned_at"):
+            shared_seen.update(known[1])
+        else:
+            del copied[i]
+            to_scan.append(i)
+    to_scan.sort()
+
+    walker = _Walker(max_depth, min_size, workers, big_file_min, big_files_limit, cancel)
     accs: Dict[int, Tuple[_Acc, Optional[_RootCtx]]] = {}
     for i in to_scan:
         r = roots[i]
@@ -1089,6 +1115,10 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
             node["scanned_at"] = t0
             end = rc.t_end if rc is not None and rc.t_end else t_done
             node["duration_s"] = round(max(0.0, end - t0), 3)
+            if rc is not None and not nested[i]:
+                shared = frozenset(k for k, nl in rc.claimed.items() if rc.links.get(k, 0) < nl)
+                node["shared_hardlinks"] = len(shared)
+                _SHARED_LINKS[r["path"]] = (t0, shared)
             if rc is not None:
                 for size, p, mt in rc.big:
                     new_big.append({"path": p, "size": size, "mtime": mt, "root": r["label"]})

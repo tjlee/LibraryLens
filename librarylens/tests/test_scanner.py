@@ -337,6 +337,35 @@ class ScannerV2Test(unittest.TestCase):
 
     # -- exclude / stubs / nested_in ----------------------------------------
 
+    def test_partial_rescan_counts_cross_root_hard_links_once(self) -> None:
+        # a file in A hard-linked into B (pnpm store <-> node_modules): one root counts it in a full scan
+        _write(self.p("a", "f"), 64 * KB)
+        _write(self.p("b", "g"), 8 * KB)
+        os.link(self.p("a", "f"), self.p("b", "f"))
+        roots = [{"label": "A", "path": self.p("a"), "category": "other"},
+                 {"label": "B", "path": self.p("b"), "category": "other"}]
+        full = self.scan(roots)
+        total = sum(r["size"] for r in full["roots"])
+        owner = next(r for r in full["roots"] if r.get("shared_hardlinks"))
+        other = next(r for r in full["roots"] if r is not owner)
+        self.assertEqual((owner["shared_hardlinks"], other["shared_hardlinks"]), (1, 0))
+        # rescanning the other root alone must not count the file again
+        part = self.scan(roots, only=[other["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        got = {r["label"]: r for r in part["roots"]}
+        self.assertEqual(got[owner["label"]]["scanned_at"], owner["scanned_at"])  # copied, not rescanned
+        part = self.scan(roots, only=[owner["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        # prev from another process (the cache loaded at startup): the owner is rescanned as well
+        full = self.scan(roots)
+        owner = next(r for r in full["roots"] if r.get("shared_hardlinks"))
+        other = next(r for r in full["roots"] if r is not owner)
+        with mock.patch.dict(scanner._SHARED_LINKS, clear=True):
+            part = self.scan(roots, only=[other["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        got = {r["label"]: r for r in part["roots"]}
+        self.assertNotEqual(got[owner["label"]]["scanned_at"], owner["scanned_at"])
+
     def test_symlinked_inner_root_scans_its_target(self) -> None:
         # ~/.gradle -> ~/dev/gradle-home: Home excludes the target, so the Gradle root must walk it
         home = self.p("home")
