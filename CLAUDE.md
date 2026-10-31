@@ -55,7 +55,7 @@ Key cross-module ideas:
 ## Server / UI
 
 - `server.py` is a `ThreadingHTTPServer` that binds only to 127.0.0.1. It checks the Host header (DNS-rebinding protection), and every POST needs the `X-LL-Token` header. The token is generated per process and injected into `static/index.html` by replacing `__LL_TOKEN__`. The endpoint list is in the module docstring.
-- Scans and background actions run on threads. `App` keeps separate locks for the result, trash, status, jobs and disk cache. Once an action succeeds, only the affected root is rescanned.
+- Scans and background actions run on threads. `App` keeps separate locks for the result, trash, status, jobs and disk cache. Once an action succeeds, only the affected root is rescanned. While a scan runs, trash and action threads keep changing the live result and journal what they do; before the new result is swapped in, trashes are replayed onto it (roots copied from `prev` or walked before the trash; roots whose walk overlapped it, and roots touched by an action, are rescanned once more) and it is saved again, so the cache matches the view. A partial scan gets a private copy of the result as `prev`.
 - `static/index.html` is the whole UI in one file of vanilla JS/CSS with no build step.
 
 ## State on disk

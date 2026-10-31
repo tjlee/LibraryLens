@@ -85,7 +85,7 @@ def default_roots() -> list[dict]          # [{"label","path","category"}], only
 def scan_path(path: str, max_depth: int = 3, min_size: int = 1 << 20) -> dict   # Node
 def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int = 8,
              progress: Callable[[str], None] | None = None) -> dict              # ScanResult (no summary yet)
-def save_cache(result: dict) -> None       # ~/.librarylens/scan.json (atomic write)
+def save_cache(result: dict) -> None       # ~/.librarylens/scan.json (atomic, owner-only, thread-safe)
 def load_cache() -> dict | None
 def find_node(result: dict, path: str) -> dict | None
 ```
@@ -285,7 +285,9 @@ Actions:
 - `GET /api/disk` → live `disk.overview()`.
 - `POST /api/action {"path","action","confirm": true}` → `actions.run(...)`; background actions become
   jobs: `GET /api/jobs` → `[{"id","action","path","state": running|done|failed,"output_tail","started_at"}]`.
-  After success: rescan only the affected root (`only=[label]`) in the background.
+  After success: rescan only the affected root (`only=[label]`) in the background. A partial scan gets a
+  private copy of the result as `prev`; trashes made while a scan runs are replayed onto its result
+  (roots whose walk overlapped the trash are rescanned), and the trash response lists any `"rescan"`.
 - UI: new **Disk** tab (default) with the stacked bar from `summary.disk_segments` + volume/snapshot list
   + "unaccounted" explanation (other users' homes unreadable without admin, snapshots, purgeable);
   **Big files** tab (`result.big_files`, Reveal/Trash); **Git repos** tab (`result.git_repos` with sizes,

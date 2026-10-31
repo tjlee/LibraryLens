@@ -230,6 +230,31 @@ class ScannerTest(unittest.TestCase):
                 f.write("{broken")
             self.assertIsNone(scanner.load_cache())
 
+    def test_save_cache_from_concurrent_threads(self) -> None:
+        # the server saves from the scan thread and from trash/action threads at the same time
+        cache = self.p("cache", "scan.json")
+        results = [{"roots": [], "n": i, "pad": "x" * 200000} for i in range(6)]
+        errors = []
+
+        def save(r: dict) -> None:
+            try:
+                for _ in range(8):
+                    scanner.save_cache(r)
+            except Exception as e:
+                errors.append(e)
+
+        with mock.patch.object(scanner, "CACHE_DIR", self.p("cache")), \
+                mock.patch.object(scanner, "CACHE_FILE", cache):
+            threads = [threading.Thread(target=save, args=(r,)) for r in results]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+            self.assertFalse(any(t.is_alive() for t in threads), "save_cache threads did not finish")
+            self.assertEqual(errors, [])
+            self.assertIn(scanner.load_cache(), results)
+            self.assertEqual(os.listdir(self.p("cache")), ["scan.json"])
+
     def test_default_roots(self) -> None:
         roots = scanner.default_roots()
         labels = [r["label"] for r in roots]

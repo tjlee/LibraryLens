@@ -1318,7 +1318,7 @@ async function doTrash() {
     return;
   }
   closeModal();
-  toast(`Moved to Trash — ${fmtSize(j.freed)} will be freed when you empty the Trash.${j.method === "rename" ? " (Moved without Finder: “Put Back” is not available.)" : ""}${j.warning ? " " + j.warning : ""}`);
+  toast(`Moved to Trash — ${fmtSize(j.freed)} will be freed when you empty the Trash.${j.method === "rename" ? " (Moved without Finder: “Put Back” is not available.)" : ""}${j.warning ? " " + j.warning : ""}${j.rescan && j.rescan.length ? " Rescanning " + j.rescan.join(", ") + " to update the view…" : ""}`);
   await loadScan();
 }
 function openChooser(path, descs, title) {

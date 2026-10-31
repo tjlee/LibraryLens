@@ -101,6 +101,8 @@ class App:
         self.jobs_lock = threading.Lock()
         self.disk_lock = threading.Lock()
         self.version = 0
+        self.result_gen = 0      # bumped whenever self.result is replaced by another result
+        self._journal = None     # trash/action changes made while a scan runs (list), else None
         self._json_cache = None  # (version, raw_bytes, gzip_bytes|None)
         self.status = {"running": False, "state": "idle", "current": None, "started_at": None,
                        "finished_at": None, "error": None, "phase": None, "only": None,
@@ -138,6 +140,7 @@ class App:
         if r:
             with self.lock:
                 self.result = r
+                self.result_gen += 1
                 self.version += 1
 
     def root_labels(self) -> list:
@@ -221,10 +224,15 @@ class App:
 
     def _run_scan(self, pipeline, max_depth: Optional[int], only: Optional[list],
                   cancel: threading.Event) -> None:
-        state, error = "done", None
+        state, error, followup = "done", None, []
         try:
             with self.lock:
-                prev = self.result if only else None
+                # Trash/action threads keep changing self.result while the scan runs: from here on
+                # they journal what they do, and it is replayed onto the new result before the swap.
+                self._journal = []
+                raw = self.result_bytes(False)[0] if only and self.result is not None else None
+            # scan_all copies the roots it does not rescan from prev, so it gets a private copy
+            prev = json.loads(raw) if raw is not None else None
             kwargs = {"prev": prev, "only": list(only) if only else None, "progress": self._progress,
                       "cancel": cancel}
             if max_depth is not None:
@@ -233,7 +241,13 @@ class App:
             if not isinstance(r, dict) or not isinstance(r.get("roots"), list):
                 raise RuntimeError("the scan pipeline returned no result")
             with self.lock:
+                changes, self._journal = self._journal or [], None
+                if changes and self.result is not None:
+                    followup = self._replay(changes, r, self.result)
+                    # also saves: the old result was saved after the pipeline saved this one
+                    self._reannotate(r)
                 self.result = r
+                self.result_gen += 1
                 self.version += 1
         except Exception as e:
             if self._is_cancel(e, cancel):
@@ -242,11 +256,15 @@ class App:
                 traceback.print_exc()
                 state, error = "failed", "%s: %s" % (type(e).__name__, e)
         finally:
+            with self.lock:
+                self._journal = None
             with self.slock:
                 self.status.update(running=False, current=None, phase=None, finished_at=time.time(),
                                    state=state, error=error, cancelled=(state == "cancelled"),
                                    cancel_requested=False)
                 pending = [] if state == "cancelled" else list(self.pending_rescan)
+                # follow-ups of this scan's own replay survive a cancel that came too late to stop it
+                pending += [x for x in followup if x not in pending]
                 self.pending_rescan = []
             if pending:
                 self.request_rescan(pending)
@@ -365,31 +383,37 @@ class App:
             stack.extend((c, a) for c in n.get("children") or [])
         return None
 
-    def _remove_from_tree(self, path: str, size: int, files: int) -> None:
-        for root in self.result.get("roots") or []:
-            rp = root.get("path") or ""
-            if not path.startswith(rp.rstrip("/") + "/") or not _root_covers(root, path):
-                continue
-            chain = self._chain(root, path)
-            last = chain[-1]
-            if last.get("path") == path and len(chain) > 1:
-                parent = chain[-2]
-                parent["children"] = [c for c in parent.get("children") or [] if c is not last]
-                ancestors = chain[:-1]
-            else:
-                ancestors = chain
-                # The item may be collapsed into the "(N smaller items)" child of its parent.
-                if (last.get("path") or "") == os.path.dirname(path):
-                    for c in last.get("children") or []:
-                        if c.get("synthetic"):
-                            c["size"] = max(0, int(c.get("size") or 0) - size)
-                            c["files"] = max(0, int(c.get("files") or 0) - files)
-            for a in ancestors:
-                a["size"] = max(0, int(a.get("size") or 0) - size)
-                a["files"] = max(0, int(a.get("files") or 0) - files)
-            for a in ancestors:
-                if a.get("children"):
-                    a["children"].sort(key=lambda c: (bool(c.get("synthetic")), -int(c.get("size") or 0)))
+    def _remove_from_tree(self, r: dict, path: str, size: int, files: int) -> None:
+        for root in r.get("roots") or []:
+            self._remove_from_root(root, path, size, files)
+
+    def _remove_from_root(self, root: dict, path: str, size: int, files: int) -> None:
+        """Take a trashed ``path`` out of one root's tree. ``size``/``files`` are used when the item has
+        no node of its own (deeper than the tree, or collapsed into "(N smaller items)")."""
+        rp = root.get("path") or ""
+        if not path.startswith(rp.rstrip("/") + "/") or not _root_covers(root, path):
+            return
+        chain = self._chain(root, path)
+        last = chain[-1]
+        if last.get("path") == path and len(chain) > 1:
+            size, files = int(last.get("size") or 0), int(last.get("files") or 0)
+            parent = chain[-2]
+            parent["children"] = [c for c in parent.get("children") or [] if c is not last]
+            ancestors = chain[:-1]
+        else:
+            ancestors = chain
+            # The item may be collapsed into the "(N smaller items)" child of its parent.
+            if (last.get("path") or "") == os.path.dirname(path):
+                for c in last.get("children") or []:
+                    if c.get("synthetic"):
+                        c["size"] = max(0, int(c.get("size") or 0) - size)
+                        c["files"] = max(0, int(c.get("files") or 0) - files)
+        for a in ancestors:
+            a["size"] = max(0, int(a.get("size") or 0) - size)
+            a["files"] = max(0, int(a.get("files") or 0) - files)
+        for a in ancestors:
+            if a.get("children"):
+                a["children"].sort(key=lambda c: (bool(c.get("synthetic")), -int(c.get("size") or 0)))
 
     def _shrink_in_tree(self, path: str, freed: int) -> None:
         """An action freed ``freed`` bytes somewhere at/below ``path``: shrink it and its ancestors."""
@@ -402,9 +426,9 @@ class App:
                 if n.get("children"):
                     n["children"].sort(key=lambda c: (bool(c.get("synthetic")), -int(c.get("size") or 0)))
 
-    def _prune_lists(self, path: str) -> None:
+    @staticmethod
+    def _prune_lists(r: dict, path: str) -> None:
         """Drop big_files / special / git_repos / projects entries at or under a removed ``path``."""
-        r = self.result
         for key in ("big_files", "special", "projects"):
             lst = r.get(key)
             if isinstance(lst, list):
@@ -417,6 +441,34 @@ class App:
                     continue
                 keep.append(e)
             r["git_repos"] = keep
+
+    def _replay(self, changes: list, new: dict, old: dict) -> list:
+        """Apply ``changes`` made on ``old`` (journaled while a scan ran) to ``new``, the scan result that
+        replaces it. Returns the root labels that still need a rescan.
+
+        A trashed item is still in every root of ``new`` that was copied from ``old`` (same
+        ``scanned_at``), and in every root whose walk finished before the trash started: take it out
+        there. A root walked while the item was being moved may or may not have counted it, and action
+        effects are not replayed, so those roots are rescanned instead."""
+        old_at = {x.get("label"): x.get("scanned_at") for x in old.get("roots") or []}
+        rescan = []
+        for c in changes:
+            path = c["path"]
+            if c["kind"] == "trash":
+                self._prune_lists(new, path)
+            for root in new.get("roots") or []:
+                label = root.get("label")
+                if not label or not _root_covers(root, path):
+                    continue
+                if c["kind"] == "trash":
+                    copied = label in old_at and root.get("scanned_at") == old_at[label]
+                    walked_end = float(root.get("scanned_at") or 0) + float(root.get("duration_s") or 0)
+                    if copied or walked_end < c["started_at"]:
+                        self._remove_from_root(root, path, c["size"], c["files"])
+                        continue
+                if label not in rescan:
+                    rescan.append(label)
+        return rescan
 
     def _list_entry(self, r: dict, path: str) -> Optional[dict]:
         """A big_files / special entry with exactly ``path`` (items deeper than the tree depth)."""
@@ -511,19 +563,36 @@ class App:
                 if safety == "danger" and not force:
                     raise ApiError(HTTPStatus.CONFLICT, "marked as dangerous; confirm with force",
                                    needs_force=True)
+            started_at = time.time()
             res = trash_mod.move_to_trash(path, root_paths, size=size)
             if not res.get("ok"):
                 raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, res.get("error") or "move to Trash failed")
-            warning = None
+            change = {"kind": "trash", "path": path, "size": size, "files": files, "started_at": started_at}
+            warning, rescan = None, []
             with self.lock:
-                if self.result is r:
-                    self._remove_from_tree(path, size, files)
-                    self._prune_lists(path)
-                    warning = self._reannotate(r)
-                    self.version += 1
+                cur = self.result
+                if self._journal is not None:  # a running scan replays it onto its result
+                    self._journal.append(change)
+                try:
+                    if cur is r:
+                        self._remove_from_tree(cur, path, size, files)
+                        self._prune_lists(cur, path)
+                    elif cur is not None:  # a scan replaced the result while Finder was moving the item
+                        rescan = self._replay([change], cur, r)
+                    if cur is not None:
+                        warning = self._reannotate(cur)
+                        self.version += 1
+                except Exception as e:  # the item is in the Trash: report that, and repair by rescanning
+                    traceback.print_exc()
+                    rescan = [x["label"] for x in (cur or {}).get("roots") or []
+                              if x.get("label") and _root_covers(x, path)]
+                    warning = "the view could not be updated (%s: %s); rescanning" % (type(e).__name__, e)
                 summary = (self.result or {}).get("summary")
+        self.request_rescan(rescan)
         out = {"ok": True, "freed": size, "summary": summary, "method": res.get("method"),
                "trashed_to": res.get("trashed_to")}
+        if rescan:
+            out["rescan"] = rescan
         if warning:
             out["warning"] = warning
         return out
@@ -641,6 +710,7 @@ class App:
             if desc.get("blocked"):
                 raise ApiError(HTTPStatus.CONFLICT, "blocked: %s" % desc["blocked"], blocked=desc["blocked"])
             desc = dict(desc)
+            gen = self.result_gen
         with self.jobs_lock:
             for j in self.jobs.values():
                 if j["state"] == "running" and (_inside_or_equal(j["path"], path) or _inside_or_equal(path, j["path"])):
@@ -649,7 +719,7 @@ class App:
             job = {"id": "j%d" % next(self._job_ids), "action": action, "label": desc.get("label"),
                    "path": path, "state": "running", "started_at": time.time(), "finished_at": None,
                    "error": None, "freed": None, "details": None, "background": bool(desc.get("background")),
-                   "_tail": collections.deque(maxlen=JOB_TAIL_LINES), "_progress": False}
+                   "_tail": collections.deque(maxlen=JOB_TAIL_LINES), "_progress": False, "_gen": gen}
             self.jobs[job["id"]] = job
             self._trim_jobs()
         if job["background"]:
@@ -705,14 +775,19 @@ class App:
         with self.trash_lock:
             with self.lock:
                 r = self.result
+                if self._journal is not None:  # a running scan rescans these roots after its swap
+                    self._journal.append({"kind": "action", "path": path})
                 if r is not None:
                     covering = [x for x in r.get("roots") or [] if _root_covers(x, path)]
                     covering.sort(key=lambda x: -len(x.get("path") or ""))
                     labels = [x.get("label") for x in covering if x.get("label")]
-                    self._shrink_in_tree(path, freed)
-                    self._mark_action_done(r, path, action, freed)
-                    warning = self._reannotate(r)
-                    self.version += 1
+                    # A result swapped in while the action ran may already reflect it (if its scan
+                    # walked the repo afterwards): don't subtract twice, the rescan below settles it.
+                    if self.result_gen == job.get("_gen"):
+                        self._shrink_in_tree(path, freed)
+                        self._mark_action_done(r, path, action, freed)
+                        warning = self._reannotate(r)
+                        self.version += 1
         with self.jobs_lock:
             job["rescan"] = labels
             if warning:
