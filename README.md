@@ -67,7 +67,8 @@ running; quit the app first.
 - **Move to Trash** asks Finder to move the item, so **Put Back** works. If Finder can't (for
   example because automation permission was denied), LibraryLens renames the item into `~/.Trash`
   instead, without Put Back. Nothing is deleted permanently, and no space is freed until you empty
-  the Trash.
+  the Trash. If the folder contains locations that are scanned separately (for example `~/.local`
+  holds uv's cache), they go to the Trash with it; the dialog lists them and shows the combined size.
 - **Git actions** (Git repos view), each with its own confirmation:
   - *Delete leftover fetch temp files*: permanently deletes `tmp_pack_*` and similar leftovers of
     interrupted fetches in `objects/pack`. Git never uses them, and moving them to the Trash would
@@ -128,7 +129,8 @@ python3 -m librarylens.disk                          # disk overview as JSON
 - **Every change is checked again at the moment it runs.** Ratings and buttons in the UI are only
   advice. Move to Trash refuses `/`, your home folder, `~/Library`, the Trash itself, any scanned
   location's root, anything outside the scanned locations, anything inside a `.git` folder or a bare
-  repository, and items whose app is running. These checks ignore letter case, as APFS does.
+  repository, and anything an app is using right now (checked again at that moment, not taken from the
+  scan). These checks ignore letter case, as APFS does.
 - **Scans never follow symlinks** and never cross into other volumes.
 - **Local only.** The server listens on `127.0.0.1` only, checks the `Host` header, and accepts
   changes only with a token that is generated per run and embedded in the page.
