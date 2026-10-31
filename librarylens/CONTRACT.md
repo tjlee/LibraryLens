@@ -142,7 +142,8 @@ Real findings that motivated this (use them as test expectations):
 | `detectors.py` (new), `actions.py` (new) | agent C |
 | `server.py`, `trash.py`, `static/index.html` (v2) | agent D |
 
-New import rules: `server.py` imports `pipeline`, `scanner`, `insights`, `actions`, `trash`, `disk`.
+New import rules: `server.py` imports `pipeline`, `scanner`, `insights`, `actions`, `trash`, `disk`,
+`resolver` (to re-check running apps before a trash).
 `pipeline.py` imports scanner, disk, resolver, detectors, insights. `disk`, `detectors`, `actions` import
 nothing from the package. Keep existing tests passing (update them if a contract change requires it).
 
@@ -190,6 +191,13 @@ def scan_all(roots=None, max_depth=3, workers=8, progress=None, min_size=1<<20,
              big_file_min: int = 500 * 10**6, big_files_limit: int = 200) -> dict
 ```
 - Each Root gets `"scanned_at"` and `"duration_s"` (per-root rescan merges into `prev`).
+- Each walked non-nested Root gets `"shared_hardlinks"`: how many hard-linked files it counted that also
+  have links in another root. A partial rescan treats those as already counted (the inodes are kept in
+  memory per process), or rescans that root too when they are not known (e.g. `prev` from the cache,
+  or `scanner.forget_shared_links(path)` was called because a trash changed the root's tree).
+- A Root whose path contains a symlink gets `"real"` (its path with symlinks resolved), which is where it
+  appears in other roots' trees. A root that is itself a symlink to a folder on the same volume is
+  walked through the link (its node paths keep the link); other symlinks are never followed.
 - `result["big_files"]`: up to `big_files_limit` largest regular files ≥ `big_file_min` across all roots,
   sorted desc: `{"path","size","mtime","root": label}` (collected during the walk, heap-based).
 - `result["special"]`: special directories found at ANY depth (outermost match only, i.e. don't record
@@ -238,6 +246,9 @@ Sets on nodes (tree nodes at the matching path, if present) and builds `result["
   vm: `{"vm_name","last_used","snapshots": n}`; build_output: `{"project","project_mtime"}`.
 - `node["actions"]`: list of available actions (see below), only for kinds that have them.
 - `result["git_repos"]`: list of the git `details` dicts (+ `"path"` of the work tree, `"size"` of .git).
+- Build-output-looking folders of installed software (dev_cache roots `/opt`, `/usr/local`, app data,
+  hidden home folders, `*.app` bundles) get no kind and no project; their `special` entry gets
+  `"installed": true` and is left out of `summary["by_kind"]`.
 Must be fast (< 5 s total; filesystem reads only on special dirs, not the whole tree).
 
 ## Actions (agent C, `actions.py`) — allow-listed operations besides Move to Trash
@@ -288,6 +299,8 @@ Actions:
   After success: rescan only the affected root (`only=[label]`) in the background. A partial scan gets a
   private copy of the result as `prev`; trashes made while a scan runs are replayed onto its result
   (roots whose walk overlapped the trash are rescanned), and the trash response lists any `"rescan"`.
+  Trashing a folder that contains other roots moves them too: they are checked for running apps,
+  counted in `freed` and dropped from the result.
 - UI: new **Disk** tab (default) with the stacked bar from `summary.disk_segments` + volume/snapshot list
   + "unaccounted" explanation (other users' homes unreadable without admin, snapshots, purgeable);
   **Big files** tab (`result.big_files`, Reveal/Trash); **Git repos** tab (`result.git_repos` with sizes,

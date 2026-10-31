@@ -99,6 +99,10 @@ class RegexTest(unittest.TestCase):
         self.assertEqual(p("/Library/Developer/CommandLineTools/usr/libexec/git-core/git pack-objects --local")
                          ["sub"], "pack-objects")
         self.assertEqual(p("git-remote-https origin https://x")["sub"], "remote-https")
+        # global options with a separate value must not be taken for the subcommand
+        self.assertEqual(p("git --git-dir /x/.git fetch origin"), {"sub": "fetch", "C": None, "git_dir": "/x/.git"})
+        self.assertEqual(p("/usr/bin/git --work-tree /w --namespace ns -c a=b gc --auto")["sub"], "gc")
+        self.assertEqual(p("git --git-dir=/x/.git index-pack --stdin")["git_dir"], "/x/.git")
         self.assertIsNone(p("/bin/zsh -c echo git fetch"))
         self.assertIsNone(p("vim notes-about-git"))
 
@@ -297,6 +301,19 @@ class WorktreePruneTest(Base):
         for name in ("ext", "wt1"):
             self.assertTrue(os.path.isdir(os.path.join(gd, "worktrees", name)), name)
 
+    def test_worktree_below_an_empty_mount_point_is_unreachable(self) -> None:
+        # ~/mnt/nas is where an sshfs share gets mounted; while it isn't, the folder is empty
+        gd = make_repo(self.root)
+        git("-C", os.path.dirname(gd), "worktree", "add", "-q", os.path.join(self.root, "share"))
+        os.makedirs(os.path.join(self.root, "mnt", "nas"))
+        with open(os.path.join(gd, "worktrees", "share", "gitdir"), "w") as f:
+            f.write(os.path.join(self.root, "mnt", "nas", "wt", ".git") + "\n")
+        wt = actions.worktrees(gd)
+        self.assertEqual(wt["unreachable_worktrees"], [os.path.join(self.root, "mnt", "nas", "wt")])
+        self.assertEqual(wt["prunable_worktrees"], [])
+        for p in ("/Network/Servers/nas/wt/.git", "/net/nas/wt/.git"):
+            self.assertTrue(actions._out_of_reach(p), p)
+
 
 class GcTest(Base):
     def test_gc_blocked_when_free_space_insufficient(self) -> None:
@@ -328,6 +345,20 @@ class GcTest(Base):
         phases = [e.get("phase") for e in self.log_entries()]
         self.assertIn("start", phases)
         self.assertTrue(self.log_entries()[-1]["ok"])
+
+    def test_gc_keeps_worktrees_that_are_out_of_reach(self) -> None:
+        # plain `git gc` prunes worktrees it can't find once they are 3 months old
+        gd = make_repo(self.root, packs=2)
+        git("-C", os.path.dirname(gd), "worktree", "add", "-q", os.path.join(self.root, "ext"))
+        admin = os.path.join(gd, "worktrees", "ext")
+        with open(os.path.join(admin, "gitdir"), "w") as f:
+            f.write("/Volumes/librarylens-test-%s/ext/.git\n" % os.urandom(4).hex())
+        old = time.time() - 200 * 86400
+        for name in os.listdir(admin):
+            os.utime(os.path.join(admin, name), (old, old))
+        res = actions.run("git_gc", gd, [self.root])
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(os.path.isdir(admin))
 
     def test_gc_blocked_while_running(self) -> None:
         gd = make_repo(self.root, packs=2)

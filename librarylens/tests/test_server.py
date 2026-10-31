@@ -4,6 +4,7 @@ import copy
 import gzip
 import http.client
 import json
+import socket
 import threading
 import time
 import types
@@ -137,12 +138,17 @@ class Stubs:
         self.action_gate = threading.Event()
         self.action_gate.set()
         self.action_result = {"ok": True, "error": None, "freed": 3000, "details": {"deleted": 2}}
+        self.running_now = {}       # app name -> running, applied by the resolver stub (as ps would)
+        self.resolver_calls = 0
+        self.forgotten = []         # roots whose hard-link claims the server told the scanner to forget
         self.walk_s = 0.0           # how long each rescanned root's walk takes (its duration_s)
         self.ignore_cancel = False  # True: like the pipeline phases after the walk, which never check it
         self.scanner = types.SimpleNamespace(find_node=fake_find_node, save_cache=self.saved.append,
-                                             load_cache=lambda: None, Cancelled=Cancelled)
+                                             load_cache=lambda: None, Cancelled=Cancelled,
+                                             forget_shared_links=self.forgotten.append)
         self.pipeline = types.SimpleNamespace(run=self.pipeline_run, reannotate=self.reannotate)
         self.insights = types.SimpleNamespace(annotate=fake_insights_annotate)
+        self.resolver = types.SimpleNamespace(annotate=self.resolver_annotate)
         self.trash = types.SimpleNamespace(move_to_trash=self.move_to_trash, reveal_in_finder=lambda p: None)
         self.actions = types.SimpleNamespace(run=self.actions_run)
         self.disk = types.SimpleNamespace(overview=self.overview)
@@ -169,6 +175,16 @@ class Stubs:
         self.saved.append(r)
         return r
 
+    def resolver_annotate(self, r):
+        # fresh `running` flags, and the in_use that insights derives from them for these fixtures
+        self.resolver_calls += 1
+        for root in r["roots"]:
+            for n in _walk(root):
+                a = n.get("app")
+                if a and a.get("name") in self.running_now:
+                    n["app"] = dict(a, running=self.running_now[a["name"]])
+                    n["in_use"] = self.running_now[a["name"]]
+
     def reannotate(self, r):
         self.reannotated += 1
         fake_insights_annotate(r)
@@ -194,7 +210,7 @@ class Stubs:
         return {"ok": True, "error": None, "method": "finder", "trashed_to": "/Users/fake-ll/.Trash/x"}
 
     def modules(self):
-        return {"scanner": self.scanner, "pipeline": self.pipeline, "insights": self.insights,
+        return {"scanner": self.scanner, "pipeline": self.pipeline, "insights": self.insights, "resolver": self.resolver,
                 "trash": self.trash, "actions": self.actions, "disk": self.disk}
 
 
@@ -308,6 +324,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(self.stubs.trashed, [])
 
+    def test_rejected_post_does_not_desync_keep_alive(self):
+        # a POST refused before its body is read, then a GET on the same connection
+        body = json.dumps({"path": L + "/Caches/com.example.tool"}).encode()
+        reqs = (b"POST /api/trash HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: http://evil.example\r\n"
+                b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s"
+                b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n") % (self.port, len(body), body, self.port)
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+            s.sendall(reqs)
+            data = b""
+            try:
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+            except socket.timeout:
+                pass
+        self.assertTrue(data.startswith(b"HTTP/1.1 403"), data[:80])
+        self.assertNotIn(b"501", data)  # the body was not parsed as a request
+        self.assertEqual(data.count(b"HTTP/1."), 1)  # the server closed the connection instead
+        self.assertEqual(self.stubs.trashed, [])
+
     def test_get_scan_returns_fixture_plain_and_gzip(self):
         status, j = self.jreq("GET", "/api/scan")
         self.assertEqual(status, 200)
@@ -349,6 +387,44 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("running", j["error"])
         self.assertEqual(self.stubs.trashed, [])
+
+    def test_trash_rechecks_running_apps_at_trash_time(self):
+        # the scan (maybe loaded from the cache days ago) is not the truth about what runs now
+        tool = L + "/Caches/com.example.tool"
+        self.find(tool, "Caches")["app"] = {"name": "Slack", "running": False}
+        self.stubs.running_now = {"Slack": True}  # started since the scan
+        status, j = self.jreq("POST", "/api/trash", {"path": tool})
+        self.assertEqual(status, 409, j)
+        self.assertIn("Slack is running", j["error"])
+        self.stubs.running_now = {"IntelliJ IDEA": False}  # quit since the scan
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/JetBrains/IntelliJIdea2027.1"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual([t[0] for t in self.stubs.trashed], [L + "/Caches/JetBrains/IntelliJIdea2027.1"])
+
+    def test_cheap_refusals_come_before_the_running_app_check(self):
+        for p, code in ((L + "/Caches/nope", 404), (self.GIT, 409), (L + "/Caches", 403)):
+            status, _ = self.jreq("POST", "/api/trash", {"path": p})
+            self.assertEqual(status, code, p)
+        self.assertEqual(self.stubs.resolver_calls, 0)  # no `ps` for requests that were refused anyway
+
+    def test_trash_at_a_roots_real_path_refused(self):
+        # a root under a symlinked path appears in other roots' trees at its real path
+        docker = next(x for x in self.app.result["roots"] if x["label"] == "Docker")
+        docker["real"] = L + "/Caches/com.example.tool"
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 403, j)
+        self.assertIn("scan root", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
+    def test_trash_makes_the_scanner_forget_hard_link_claims_of_changed_roots(self):
+        caches = next(x for x in self.app.result["roots"] if x["label"] == "Caches")
+        caches["shared_hardlinks"] = 2
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(self.stubs.forgotten, [L + "/Caches"])
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate/out"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(self.stubs.forgotten, [L + "/Caches"])  # Home has no shared hard links
 
     def test_trash_running_descendant_with_inherited_app_refused(self):
         # the running node has no "app" of its own; that must not read as "nothing is running"
@@ -563,6 +639,7 @@ class ServerTest(unittest.TestCase):
         self.assertNotIn(p, [e["path"] for e in self.app.result["special"]])
         self.assertEqual(self.app.rescan_log, [])
         self.assertIs(self.stubs.saved[-1], self.app.result)  # saved again: the cache matches the view
+        self.assertEqual(self.stubs.reannotated, 1)  # the trash's own; the swap only re-summarises
 
     def test_trash_in_root_walked_before_the_trash_is_replayed(self):
         p = L + "/Caches/com.example.tool"
@@ -611,6 +688,26 @@ class ServerTest(unittest.TestCase):
         self.join_scans()
         self.assertEqual(self.app.rescan_log, [["Caches"]])
         self.assertEqual(self.stubs.runs[1]["only"], ["Caches"])
+
+    def test_cancel_keeps_the_rescan_a_trash_asked_for(self):
+        def slow_move(path, allowed_roots, size=None):  # scan 1 lands, scan 2 starts, while Finder works
+            self.app.start_scan()
+            self.app.scan_thread.join(5)
+            self.stubs.scan_gate.clear()
+            self.app.start_scan()
+            return {"ok": True, "error": None, "method": "finder", "trashed_to": H + "/.Trash/x"}
+        self.stubs.trash.move_to_trash = slow_move
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(j["rescan"], ["Caches"])
+        self.assertEqual(self.app.status_json()["pending_rescan"], ["Caches"])
+        status, _ = self.jreq("POST", "/api/scan/cancel", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.app.status_json()["pending_rescan"], ["Caches"])  # a repair: kept
+        self.stubs.scan_gate.set()
+        self.assertTrue(self.wait_for(lambda: len(self.stubs.runs) == 3))
+        self.join_scans()
+        self.assertEqual(self.stubs.runs[2]["only"], ["Caches"])
 
     def test_action_spanning_a_scan_leaves_the_new_result_alone(self):
         self.stubs.action_gate.clear()
@@ -829,6 +926,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([e["path"] for e in self.app.result["special"]], [self.GIT])
         self.assertEqual(self.find(H, "Home")["size"], 9000)
         self.assertEqual(len(self.app.result["git_repos"]), 1)
+
+    def test_trash_folder_containing_scanned_roots(self):
+        # ~/.local holds ~/.local/share/uv, scanned as its own root and excluded from Home (a stub)
+        local, uv = H + "/.local", H + "/.local/share/uv"
+        home = self.find(H, "Home")
+        stub = {"name": "uv", "path": uv, "size": 0, "files": 0, "is_dir": True, "children": [], "link_root": "uv"}
+        home["children"].append(node(local, 100, 10, [node(H + "/.local/share", 100, 10, [stub])]))
+        home["size"] += 100
+        home["exclude"].append(uv)
+        cache = node(uv + "/cache", 500, 50, app={"name": "uv"}, in_use=True)
+        self.app.result["roots"].append(node(uv, 500, 50, [cache], label="uv", category="dev_cache", nested_in=None))
+        status, j = self.jreq("POST", "/api/trash", {"path": local})
+        self.assertEqual(status, 409, j)  # uv's own tree is checked for running apps too
+        self.assertIn("contains uv (scanned separately) with data of uv", j["error"])
+        cache["in_use"] = False
+        status, j = self.jreq("POST", "/api/trash", {"path": local})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(j["freed"], 600)  # the folder plus the root inside it
+        self.assertEqual(self.stubs.trashed[0][2], 600)  # also in the audit log
+        self.assertNotIn("uv", [x["label"] for x in self.app.result["roots"]])
+        self.assertEqual(self.find(H, "Home")["size"], 10000)
+        self.assertEqual(j["summary"]["total"], 16000)  # neither ~/.local nor uv is counted any more
 
     def test_trash_link_stub_refused(self):
         status, j = self.jreq("POST", "/api/trash", {"path": L})

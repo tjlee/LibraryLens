@@ -110,6 +110,7 @@ class App:
         self.scan_thread = None
         self.cancel_event = None
         self.pending_rescan = []     # root labels queued while a scan is running
+        self.pending_repair = []     # ... of those, the ones fixing the view after a trash/action
         self.rescan_log = []         # every rescan request (labels), for diagnostics/tests
         self.jobs = collections.OrderedDict()
         self.job_threads = []
@@ -200,7 +201,7 @@ class App:
                 raise ApiError(HTTPStatus.CONFLICT, "no scan is running")
             self.cancel_event.set()
             self.status.update(cancel_requested=True, state="cancelling")
-            self.pending_rescan = []
+            self.pending_rescan = list(self.pending_repair)  # repairs of the view are kept
         return self.status_json()
 
     def _progress(self, msg: Any) -> None:
@@ -244,8 +245,9 @@ class App:
                 changes, self._journal = self._journal or [], None
                 if changes and self.result is not None:
                     followup = self._replay(changes, r, self.result)
-                    # also saves: the old result was saved after the pipeline saved this one
-                    self._reannotate(r)
+                    # summary only (the pipeline just ran the rest), and save: the old result may have
+                    # been saved after the pipeline saved this one
+                    self._reannotate(r, full=False)
                 self.result = r
                 self.result_gen += 1
                 self.version += 1
@@ -262,35 +264,40 @@ class App:
                 self.status.update(running=False, current=None, phase=None, finished_at=time.time(),
                                    state=state, error=error, cancelled=(state == "cancelled"),
                                    cancel_requested=False)
-                pending = [] if state == "cancelled" else list(self.pending_rescan)
-                # follow-ups of this scan's own replay survive a cancel that came too late to stop it
+                # a cancel drops queued rescans, but not the ones repairing the view after a trash or
+                # action, nor this scan's own replay follow-ups (a cancel that came too late to stop it)
+                pending = list(self.pending_repair if state == "cancelled" else self.pending_rescan)
                 pending += [x for x in followup if x not in pending]
-                self.pending_rescan = []
+                self.pending_rescan, self.pending_repair = [], []
             if pending:
                 self.request_rescan(pending)
 
-    def request_rescan(self, labels: list) -> None:
-        """Rescan ``labels`` in the background now, or right after the running scan finishes."""
+    def request_rescan(self, labels: list, repair: bool = False) -> None:
+        """Rescan ``labels`` in the background now, or right after the running scan finishes.
+        ``repair``: the rescan fixes the view after a trash/action, so cancelling a scan keeps it."""
         labels = [x for x in labels if x]
         if not labels or self.result is None:
             return
         with self.slock:
             self.rescan_log.append(list(labels))
             if self.status["running"]:
-                for x in labels:
-                    if x not in self.pending_rescan:
-                        self.pending_rescan.append(x)
+                self._queue_rescan(labels, repair)
                 return
         try:
             self.start_scan(only=labels)
         except ApiError as e:
             if e.status == HTTPStatus.CONFLICT:  # raced with another scan: queue it
                 with self.slock:
-                    for x in labels:
-                        if x not in self.pending_rescan:
-                            self.pending_rescan.append(x)
+                    self._queue_rescan(labels, repair)
             else:
                 print("librarylens: could not start rescan: %s" % e.message, file=sys.stderr)
+
+    def _queue_rescan(self, labels: list, repair: bool) -> None:
+        for x in labels:
+            if x not in self.pending_rescan:
+                self.pending_rescan.append(x)
+            if repair and x not in self.pending_repair:
+                self.pending_repair.append(x)
 
     # ---- disk ----------------------------------------------------------------------------
     def disk_overview(self) -> dict:
@@ -393,6 +400,10 @@ class App:
         rp = root.get("path") or ""
         if not path.startswith(rp.rstrip("/") + "/") or not _root_covers(root, path):
             return
+        if root.get("shared_hardlinks"):  # what it counted changes: the scanner must not trust it
+            forget = getattr(self.mod("scanner"), "forget_shared_links", None)
+            if forget is not None:
+                forget(rp)
         chain = self._chain(root, path)
         last = chain[-1]
         if last.get("path") == path and len(chain) > 1:
@@ -442,6 +453,13 @@ class App:
                 keep.append(e)
             r["git_repos"] = keep
 
+    @staticmethod
+    def _drop_roots_inside(r: dict, path: str) -> None:
+        """Remove the roots that were inside a trashed folder (they went to the Trash with it)."""
+        r["roots"] = [x for x in r.get("roots") or []
+                      if not any(q and _norm(q) != path and _inside_or_equal(_norm(q), path)
+                                 for q in (x.get("path"), x.get("real")))]
+
     def _replay(self, changes: list, new: dict, old: dict) -> list:
         """Apply ``changes`` made on ``old`` (journaled while a scan ran) to ``new``, the scan result that
         replaces it. Returns the root labels that still need a rescan.
@@ -456,6 +474,7 @@ class App:
             path = c["path"]
             if c["kind"] == "trash":
                 self._prune_lists(new, path)
+                self._drop_roots_inside(new, path)
             for root in new.get("roots") or []:
                 label = root.get("label")
                 if not label or not _root_covers(root, path):
@@ -487,14 +506,26 @@ class App:
                 return True
         return False
 
-    def _reannotate(self, r: dict) -> Optional[str]:
-        """pipeline.reannotate (apps + detectors + insights + save); falls back to insights + save."""
+    def _refresh_running(self, r: dict) -> None:
+        """Re-check which apps run right now (``in_use`` comes from the scan, which may be days old, e.g.
+        loaded from the cache at startup): fresh ``running`` flags, then insights recomputes ``in_use``."""
         try:
-            self.mod("pipeline").reannotate(r)
-            return None
-        except Exception as e:
-            print("librarylens: full re-annotation failed (%s: %s); recomputing insights only"
-                  % (type(e).__name__, e), file=sys.stderr)
+            self.mod("resolver").annotate(r)
+            self.mod("insights").annotate(r)
+            self.version += 1
+        except Exception as e:  # keep the scan-time state; the checks below still apply
+            print("librarylens: could not re-check running apps: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+
+    def _reannotate(self, r: dict, full: bool = True) -> Optional[str]:
+        """pipeline.reannotate (apps + detectors + insights + save); insights + save if not ``full``
+        or if that fails."""
+        if full:
+            try:
+                self.mod("pipeline").reannotate(r)
+                return None
+            except Exception as e:
+                print("librarylens: full re-annotation failed (%s: %s); recomputing insights only"
+                      % (type(e).__name__, e), file=sys.stderr)
         warning = None
         try:
             self.mod("insights").annotate(r)
@@ -518,7 +549,8 @@ class App:
                     raise ApiError(HTTPStatus.CONFLICT, "no scan result yet")
                 roots = r.get("roots") or []
                 root_paths = [_norm(x["path"]) for x in roots if x.get("path")]
-                if path in root_paths:
+                # a root under a symlinked path shows up in other roots' trees at its "real" path
+                if path in root_paths or path in [_norm(x["real"]) for x in roots if x.get("real")]:
                     raise ApiError(HTTPStatus.FORBIDDEN, "refusing to trash a scan root; open it and trash its contents")
                 if not any(_inside_or_equal(path, rp) for rp in root_paths):
                     raise ApiError(HTTPStatus.FORBIDDEN, "path is outside the scanned locations")
@@ -539,6 +571,7 @@ class App:
                         or any(a.get("kind") == "git_dir" for a in ancestors)
                         or self._in_special_git_dir(r, path)):
                     raise ApiError(HTTPStatus.CONFLICT, GIT_TRASH_MSG, use_actions=True)
+                self._refresh_running(r)
                 app = self._effective_app(path)
                 if (node or {}).get("in_use"):
                     raise ApiError(HTTPStatus.CONFLICT, "%s is running — quit it first"
@@ -560,11 +593,22 @@ class App:
                     safety = (deepest or {}).get("safety")
                     size = int(entry.get("size") or 0)
                     files = int(entry.get("files") or 1)
+                # Separately scanned roots inside the folder go to the Trash with it: check them for
+                # running apps like the folder's own subtree, and count them (non-nested ones are not
+                # part of the folder's own size; nested ones are inside another root that is).
+                inner = [x for x in roots if any(q and _inside_or_equal(_norm(q), path)
+                                                 for q in (x.get("path"), x.get("real")))]
+                for x in inner:
+                    sub = self._running_in_subtree(x, x.get("app"))
+                    if sub is not None:
+                        raise ApiError(HTTPStatus.CONFLICT, "contains %s (scanned separately) with data of %s, "
+                                       "which is running — quit it first" % (x.get("label"), sub.get("name") or "a running app"))
+                inner_size = sum(int(x.get("size") or 0) for x in inner if not x.get("nested_in"))
                 if safety == "danger" and not force:
                     raise ApiError(HTTPStatus.CONFLICT, "marked as dangerous; confirm with force",
                                    needs_force=True)
             started_at = time.time()
-            res = trash_mod.move_to_trash(path, root_paths, size=size)
+            res = trash_mod.move_to_trash(path, root_paths, size=size + inner_size)
             if not res.get("ok"):
                 raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, res.get("error") or "move to Trash failed")
             change = {"kind": "trash", "path": path, "size": size, "files": files, "started_at": started_at}
@@ -574,22 +618,19 @@ class App:
                 if self._journal is not None:  # a running scan replays it onto its result
                     self._journal.append(change)
                 try:
-                    if cur is r:
-                        self._remove_from_tree(cur, path, size, files)
-                        self._prune_lists(cur, path)
-                    elif cur is not None:  # a scan replaced the result while Finder was moving the item
+                    if cur is not None:  # r itself, or a result a scan swapped in while Finder worked
                         rescan = self._replay([change], cur, r)
-                    if cur is not None:
                         warning = self._reannotate(cur)
-                        self.version += 1
                 except Exception as e:  # the item is in the Trash: report that, and repair by rescanning
                     traceback.print_exc()
                     rescan = [x["label"] for x in (cur or {}).get("roots") or []
                               if x.get("label") and _root_covers(x, path)]
                     warning = "the view could not be updated (%s: %s); rescanning" % (type(e).__name__, e)
+                if cur is not None:
+                    self.version += 1  # also after a failed update: it may have changed cur partly
                 summary = (self.result or {}).get("summary")
-        self.request_rescan(rescan)
-        out = {"ok": True, "freed": size, "summary": summary, "method": res.get("method"),
+        self.request_rescan(rescan, repair=True)
+        out = {"ok": True, "freed": size + inner_size, "summary": summary, "method": res.get("method"),
                "trashed_to": res.get("trashed_to")}
         if rescan:
             out["rescan"] = rescan
@@ -792,7 +833,7 @@ class App:
             job["rescan"] = labels
             if warning:
                 job["warning"] = warning
-        self.request_rescan(labels)
+        self.request_rescan(labels, repair=True)
 
     def _mark_action_done(self, r: dict, path: str, action: str, freed: int) -> None:
         """Best-effort immediate update until the rescan lands (detectors may recompute it anyway)."""
@@ -897,6 +938,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body too large")
         raw = self.rfile.read(n) if n else b""
+        self._body_read = True
         if not raw.strip():
             return {}
         try:
@@ -954,6 +996,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard():
             return
         path = self.path.split("?", 1)[0]
+        self._body_read = False
         try:
             if not self._origin_ok():
                 raise ApiError(HTTPStatus.FORBIDDEN, "bad Origin")
@@ -985,6 +1028,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc()
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "%s: %s" % (type(e).__name__, e))
+        finally:
+            if not self._body_read:  # rejected before reading it: the body would be parsed as the next request
+                self.close_connection = True
 
 
 class _Server(ThreadingHTTPServer):

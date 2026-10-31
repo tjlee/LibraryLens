@@ -205,9 +205,14 @@ def _dir_alloc(path: str, limit: int = 20000) -> int:
     return total
 
 
+# autofs roots: network shares, mounted on demand and missing while the server is unreachable
+_AUTOFS_ROOTS = ("/Network/", "/net/")
+
+
 def _out_of_reach(path: str) -> bool:
     """A path that does not look present but may only be out of reach right now: on a /Volumes drive
-    that is not mounted, or not checkable at all (permissions, macOS privacy protection)."""
+    or network share that is not mounted, below an empty folder (what an unmounted mount point looks
+    like, e.g. an sshfs mount under ~/mnt), or not checkable at all (permissions, privacy protection)."""
     try:
         os.stat(path)
         return False
@@ -218,13 +223,21 @@ def _out_of_reach(path: str) -> bool:
     parts = path.split("/")
     if len(parts) > 2 and parts[0] == "" and parts[1] == "Volumes":
         return not os.path.ismount(os.path.realpath("/Volumes/" + parts[2]))
-    return False
+    if path.startswith(_AUTOFS_ROOTS):
+        return True
+    a = os.path.dirname(path)
+    while not os.path.lexists(a) and os.path.dirname(a) != a:
+        a = os.path.dirname(a)
+    try:
+        return os.path.isdir(a) and not [n for n in os.listdir(a) if n != ".DS_Store"]
+    except OSError:
+        return True
 
 
 def _unreachable_reason(paths: List[str]) -> str:
     n = len(paths)
-    return ("git worktree prune would also drop %d worktree%s on a disconnected drive or an unreadable "
-            "location (%s); connect the drive first, or protect %s with `git worktree lock`"
+    return ("git worktree prune would also drop %d worktree%s on a disconnected drive or share, or in an "
+            "unreadable location (%s); connect it first, or protect %s with `git worktree lock`"
             % (n, "" if n == 1 else "s", ", ".join(paths[:5]) + (", ..." if n > 5 else ""),
                "it" if n == 1 else "them"))
 
@@ -318,6 +331,11 @@ def fresh_locks(git_dir: str, now: Optional[float] = None) -> List[str]:
     return found
 
 
+# git(1) global options whose value is the next argument (``--git-dir=<path>`` style is handled too)
+_GIT_OPTS_WITH_ARG = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                                "--config-env", "--attr-source"})
+
+
 def _parse_git_command(cmd: str) -> Optional[dict]:
     """Recognise a git process from its `ps` command line -> {"sub", "C", "git_dir"} or None."""
     toks = cmd.split()
@@ -328,9 +346,11 @@ def _parse_git_command(cmd: str) -> Optional[dict]:
             info = {"sub": None, "C": None, "git_dir": None}
             while j < len(toks):
                 a = toks[j]
-                if a in ("-C", "-c") and j + 1 < len(toks):
+                if a in _GIT_OPTS_WITH_ARG and j + 1 < len(toks):
                     if a == "-C":
                         info["C"] = toks[j + 1]
+                    elif a == "--git-dir":
+                        info["git_dir"] = toks[j + 1]
                     j += 2
                     continue
                 if a.startswith("--git-dir="):
@@ -849,7 +869,9 @@ def _gc(git_dir: str, on_output) -> dict:
         return _result(False, "not enough free space: " + reason, 0, {"needs_free": need, "free": free})
     before = _objects_size(git_dir)
     wt = worktree_of(git_dir)
-    argv = ["git", "-C", wt, "gc"]
+    # gc also prunes worktrees git can't find (gc.worktreePruneExpire, 3 months by default), including
+    # ones on an unplugged drive; that is git_worktree_prune's job, with its own checks
+    argv = ["git", "-C", wt, "-c", "gc.worktreePruneExpire=never", "gc"]
     _emit(on_output, "$ git -C %s gc" % wt)
     rc, tail, err = _stream(argv, on_output, GC_TIMEOUT_S)
     after = _objects_size(git_dir)

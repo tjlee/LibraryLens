@@ -287,8 +287,26 @@ class AnnotateTest(unittest.TestCase):
         self.assertEqual(s["total"], b["total"])
         self.assertEqual(s["by_category"]["cache"], b["by_category"]["cache"])
         self.assertEqual(sum(s["by_category"].values()), s["total"])
-        self.assertEqual(s["reclaimable"], b["reclaimable"] + int(1.6 * GB))
-        self.assertEqual([c["path"] for c in s["top_candidates"]].count(f"{C}/Homebrew"), 1)
+        # a scan root can't be moved to the Trash, so its stale content is suggested instead, once
+        self.assertEqual(s["reclaimable"], b["reclaimable"] + int(1.5 * GB))
+        paths = [c["path"] for c in s["top_candidates"]]
+        self.assertNotIn(f"{C}/Homebrew", paths)
+        self.assertEqual(paths.count(f"{C}/Homebrew/downloads"), 1)
+
+    def test_nested_root_at_its_real_path_is_not_a_candidate(self) -> None:
+        # ~/.cache -> ~/Library/Caches/dotcache: the "Bazel cache" root (~/.cache/bazel) shows up in the
+        # Caches tree as .../dotcache/bazel
+        dot = f"{C}/dotcache"
+        r = {"roots": [
+            root("Caches", "cache", n(C, 3 * GB, children=[n(dot, 3 * GB, mtime=OLD, children=[
+                n(f"{dot}/bazel", 2 * GB, mtime=OLD), n(f"{dot}/other", 1 * GB)])])),
+            dict(root("Bazel cache", "bazel", n(f"{H}/.cache/bazel", 2 * GB, mtime=OLD), nested_in="Caches"),
+                 real=f"{dot}/bazel"),
+        ]}
+        find(r, dot)["mtime"] = FRESH  # a fresh sibling keeps dotcache itself from being the candidate
+        insights.annotate(r, now=NOW)
+        self.assertNotIn(f"{dot}/bazel", [c["path"] for c in r["summary"]["top_candidates"]])
+        self.assertIn("Bazel", find(r, f"{dot}/bazel", "Caches")["reason"])  # rated like the nested root
 
     def test_orphaned_docker_container_counted_once(self) -> None:
         r = make_result()
@@ -654,6 +672,20 @@ class InsightsV2Test(unittest.TestCase):
         self.assertIn(f"{C}/somecache", self.trash)  # stale cache, contains a repo clone
         self.assertNotIn(f"{C}/somecache/repo/.git", [a["path"] for a in self.acts])
 
+    def test_git_dir_in_cache_is_never_a_trash_candidate(self) -> None:
+        # Move to Trash refuses git internals, even where they are rated as plain cache: a stale Cargo
+        # bare repo next to a fresh one must not be suggested (nor counted as reclaimable)
+        db = f"{H}/.cargo/git/db"
+        r = {"roots": [root("Cargo", "dev_cache", n(f"{H}/.cargo", 3 * G, children=[n(db, 3 * G, children=[
+            n(f"{db}/foo-123", 2 * G, mtime=OLD, kind="git_dir", details={"repo": "foo", "bare": True},
+              children=[n(f"{db}/foo-123/objects", 2 * G, mtime=OLD)]),
+            n(f"{db}/bar-456", 1 * G, kind="git_dir", details={"repo": "bar", "bare": True}),
+        ])]))]}
+        insights.annotate(r, stale_days=90, now=NOW)
+        self.assertEqual(find(r, f"{db}/foo-123")["safety"], "safe")  # still rated as cache
+        self.assertEqual(r["summary"]["top_candidates"], [])
+        self.assertEqual(r["summary"]["trash_reclaimable"], 0)
+
     def test_applications_and_system(self) -> None:
         slack = self.f("/Applications/Slack.app")
         self.assertEqual(slack["safety"], "danger")
@@ -703,6 +735,13 @@ class InsightsV2Test(unittest.TestCase):
             self.assertNotEqual(x["safety"], "safe", p)
             self.assertNotIn("regenerable", x["flags"], p)
             self.assertNotIn("Build output", x["reason"], p)
+
+    def test_by_kind_skips_specials_of_installed_software(self) -> None:
+        r = make_v2()
+        r["special"].append({"path": "/opt/homebrew/lib/node_modules", "kind": "build_output", "size": int(7 * G),
+                             "files": 9, "mtime": OLD, "root": "/opt", "installed": True})
+        insights.annotate(r, stale_days=90, now=NOW)
+        self.assertEqual(r["summary"]["by_kind"]["build_output"], self.s["by_kind"]["build_output"])
 
     def test_installed_software(self) -> None:
         hb = self.f("/opt/homebrew")

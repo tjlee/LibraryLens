@@ -1281,6 +1281,9 @@ function openTrash(r) {
   const n = r.n, eff = r.eff, a = (eff && eff.app) || null;
   const block = trashBlock(n, eff, r.chain);
   const safety = n.safety || "unknown";
+  // separately scanned locations inside the folder go to the Trash with it
+  const inner = (DATA.roots || []).filter((x) => x.path && x.path.startsWith(n.path + "/"));
+  const innerSize = inner.filter((x) => !x.nested_in).reduce((s, x) => s + (x.size || 0), 0);
   const appTxt = a ? `${esc(a.name)}${a.version ? " " + esc(a.version) : ""}${a.installed === false ? " — not installed" : ""}${a.running ? " — <b>running</b>" : ""}` : `<span class="faint">unknown</span>`;
   let confirm = "";
   if (safety === "caution") confirm = `<label class="confirm"><input type="checkbox" id="m-ack"> I understand this may contain data I still need (settings, documents, sign-ins).</label>`;
@@ -1294,7 +1297,8 @@ function openTrash(r) {
   };
   showModal(`<h2 id="m-title">Move to Trash?</h2>
     <dl><dt>Path</dt><dd class="mono">${esc(tilde(n.path))}</dd>
-    <dt>Size</dt><dd><b>${esc(fmtSize(n.size))}</b>${n.files != null && n.is_dir !== false ? " · " + esc(fmtNum(n.files)) + " files" : ""}</dd>
+    <dt>Size</dt><dd><b>${esc(fmtSize(n.size + innerSize))}</b>${n.files != null && n.is_dir !== false && !inner.length ? " · " + esc(fmtNum(n.files)) + " files" : ""}</dd>
+    ${inner.length ? `<dt>Includes</dt><dd>${inner.length} separately scanned location${inner.length > 1 ? "s" : ""}: ${inner.map((x) => esc(x.label) + " (" + esc(fmtSize(x.size)) + ")").join(", ")}</dd>` : ""}
     <dt>App</dt><dd>${appTxt}</dd>
     ${n.kind ? `<dt>Kind</dt><dd>${kindBadge(n.kind)}</dd>` : ""}
     <dt>Safety</dt><dd>${n.safety ? `<span class="pill ${esc(n.safety)}">${esc(n.safety)}</span>` : "not assessed"}</dd>

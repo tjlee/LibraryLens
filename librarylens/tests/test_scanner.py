@@ -337,6 +337,86 @@ class ScannerV2Test(unittest.TestCase):
 
     # -- exclude / stubs / nested_in ----------------------------------------
 
+    def test_partial_rescan_counts_cross_root_hard_links_once(self) -> None:
+        # a file in A hard-linked into B (pnpm store <-> node_modules): one root counts it in a full scan
+        _write(self.p("a", "f"), 64 * KB)
+        _write(self.p("b", "g"), 8 * KB)
+        os.link(self.p("a", "f"), self.p("b", "f"))
+        roots = [{"label": "A", "path": self.p("a"), "category": "other"},
+                 {"label": "B", "path": self.p("b"), "category": "other"}]
+        full = self.scan(roots)
+        total = sum(r["size"] for r in full["roots"])
+        owner = next(r for r in full["roots"] if r.get("shared_hardlinks"))
+        other = next(r for r in full["roots"] if r is not owner)
+        self.assertEqual((owner["shared_hardlinks"], other["shared_hardlinks"]), (1, 0))
+        # rescanning the other root alone must not count the file again
+        part = self.scan(roots, only=[other["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        got = {r["label"]: r for r in part["roots"]}
+        self.assertEqual(got[owner["label"]]["scanned_at"], owner["scanned_at"])  # copied, not rescanned
+        part = self.scan(roots, only=[owner["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        # prev from another process (the cache loaded at startup): the owner is rescanned as well
+        full = self.scan(roots)
+        owner = next(r for r in full["roots"] if r.get("shared_hardlinks"))
+        other = next(r for r in full["roots"] if r is not owner)
+        with mock.patch.dict(scanner._SHARED_LINKS, clear=True):
+            part = self.scan(roots, only=[other["label"]], prev=full)
+        self.assertEqual(sum(r["size"] for r in part["roots"]), total)
+        got = {r["label"]: r for r in part["roots"]}
+        self.assertNotEqual(got[owner["label"]]["scanned_at"], owner["scanned_at"])
+
+    def test_hard_link_bookkeeping_avoids_needless_rescans(self) -> None:
+        _write(self.p("a", "f"), 64 * KB)
+        _write(self.p("a", "n", "x"), 8 * KB)
+        _write(self.p("b", "g"), 8 * KB)
+        _write(self.p("elsewhere", "h"), 16 * KB)
+        os.link(self.p("a", "f"), self.p("b", "f"))
+        os.link(self.p("elsewhere", "h"), self.p("b", "h"))  # its other link is in no root at all
+        roots = [{"label": "A", "path": self.p("a"), "category": "other"},
+                 {"label": "N", "path": self.p("a", "n"), "category": "other"},  # nested in A
+                 {"label": "B", "path": self.p("b"), "category": "other"}]
+        full = self.scan(roots)
+        by = {r["label"]: r for r in full["roots"]}
+        self.assertEqual(by["N"]["nested_in"], "A")
+        self.assertNotIn("shared_hardlinks", by["N"])
+        self.assertEqual(by["A"].get("shared_hardlinks", 0) + by["B"].get("shared_hardlinks", 0), 1)  # f only
+        owner = by["A"] if by["A"]["shared_hardlinks"] else by["B"]
+        with mock.patch.dict(scanner._SHARED_LINKS, clear=True):
+            # only a nested root is rescanned: it has its own dedupe set, so nothing else is re-walked
+            part = self.scan(roots, only=["N"], prev=full)
+        self.assertEqual({r["label"]: r["scanned_at"] for r in part["roots"]}[owner["label"]], owner["scanned_at"])
+        # a trash changed the owner's tree: what it counted is not known any more, so it is re-walked
+        other = "B" if owner["label"] == "A" else "A"
+        scanner.forget_shared_links(owner["path"])
+        part = self.scan(roots, only=[other], prev=full)
+        self.assertNotEqual({r["label"]: r["scanned_at"] for r in part["roots"]}[owner["label"]], owner["scanned_at"])
+
+    def test_symlinked_inner_root_is_walked_through_the_link(self) -> None:
+        # ~/.gradle -> ~/dev/gradle-home: Home excludes the target, so the Gradle root must walk it
+        home = self.p("home")
+        _write(self.p("home", "doc", "a"), 16 * KB)
+        _write(self.p("home", "dev", "gradle-home", "caches", "c"), 64 * KB)
+        _write(self.p("home", "dev", "notes"), 8 * KB)
+        os.symlink(self.p("home", "dev", "gradle-home"), self.p("home", ".gradle"))
+        cands = [("Gradle", self.p("home", ".gradle"), "dev_cache"), ("Home", home, "home")]
+        with mock.patch.object(scanner, "_CANDIDATES", cands):
+            roots = scanner.default_roots()
+        res = self.scan(roots)
+        got = {r["label"]: r for r in res["roots"]}
+        g = got["Gradle"]
+        self.assertIsNone(g["error"])
+        self.assertEqual(g["path"], self.p("home", ".gradle"))  # keeps the link: app lookups use it
+        self.assertEqual(g["real"], self.p("home", "dev", "gradle-home"))
+        self.assertGreaterEqual(g["size"], 64 * KB)  # counted once, by Gradle...
+        self.assertEqual([c["path"] for c in g["children"] if not c.get("synthetic")], [self.p("home", ".gradle", "caches")])
+        dev = next(c for c in got["Home"]["children"] if c["path"] == self.p("home", "dev"))
+        self.assertIn("Gradle", [c.get("link_root") for c in dev["children"]])  # ...and stubbed in Home
+        expected = sum(_alloc(os.path.join(d, f)) for d, _, fs in os.walk(home) for f in fs) \
+            + sum(_alloc(d) for d, _, _ in os.walk(home)) + os.lstat(self.p("home", ".gradle")).st_blocks * 512
+        self.assertEqual(g["size"] + got["Home"]["size"], expected)
+        self.assertNotIn("real", got["Home"])
+
     def test_exclude_stub_and_nested(self) -> None:
         home = self.p("home")
         _write(self.p("home", "doc", "a"), 16 * KB)
