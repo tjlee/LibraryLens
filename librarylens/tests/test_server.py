@@ -877,6 +877,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.find(H, "Home")["size"], 9000)
         self.assertEqual(len(self.app.result["git_repos"]), 1)
 
+    def test_trash_folder_containing_scanned_roots(self):
+        # ~/.local holds ~/.local/share/uv, scanned as its own root and excluded from Home (a stub)
+        local, uv = H + "/.local", H + "/.local/share/uv"
+        home = self.find(H, "Home")
+        stub = {"name": "uv", "path": uv, "size": 0, "files": 0, "is_dir": True, "children": [], "link_root": "uv"}
+        home["children"].append(node(local, 100, 10, [node(H + "/.local/share", 100, 10, [stub])]))
+        home["size"] += 100
+        home["exclude"].append(uv)
+        cache = node(uv + "/cache", 500, 50, app={"name": "uv"}, in_use=True)
+        self.app.result["roots"].append(node(uv, 500, 50, [cache], label="uv", category="dev_cache", nested_in=None))
+        status, j = self.jreq("POST", "/api/trash", {"path": local})
+        self.assertEqual(status, 409, j)  # uv's own tree is checked for running apps too
+        self.assertIn("contains uv (scanned separately) with data of uv", j["error"])
+        cache["in_use"] = False
+        status, j = self.jreq("POST", "/api/trash", {"path": local})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(j["freed"], 600)  # the folder plus the root inside it
+        self.assertEqual(self.stubs.trashed[0][2], 600)  # also in the audit log
+        self.assertNotIn("uv", [x["label"] for x in self.app.result["roots"]])
+        self.assertEqual(self.find(H, "Home")["size"], 10000)
+        self.assertEqual(j["summary"]["total"], 16000)  # neither ~/.local nor uv is counted any more
+
     def test_trash_link_stub_refused(self):
         status, j = self.jreq("POST", "/api/trash", {"path": L})
         self.assertEqual(status, 409)

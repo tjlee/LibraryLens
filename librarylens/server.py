@@ -442,6 +442,12 @@ class App:
                 keep.append(e)
             r["git_repos"] = keep
 
+    @staticmethod
+    def _drop_roots_inside(r: dict, path: str) -> None:
+        """Remove the roots that were inside a trashed folder (they went to the Trash with it)."""
+        r["roots"] = [x for x in r.get("roots") or []
+                      if not (x.get("path") and _norm(x["path"]) != path and _inside_or_equal(_norm(x["path"]), path))]
+
     def _replay(self, changes: list, new: dict, old: dict) -> list:
         """Apply ``changes`` made on ``old`` (journaled while a scan ran) to ``new``, the scan result that
         replaces it. Returns the root labels that still need a rescan.
@@ -456,6 +462,7 @@ class App:
             path = c["path"]
             if c["kind"] == "trash":
                 self._prune_lists(new, path)
+                self._drop_roots_inside(new, path)
             for root in new.get("roots") or []:
                 label = root.get("label")
                 if not label or not _root_covers(root, path):
@@ -571,11 +578,21 @@ class App:
                     safety = (deepest or {}).get("safety")
                     size = int(entry.get("size") or 0)
                     files = int(entry.get("files") or 1)
+                # Separately scanned roots inside the folder go to the Trash with it: check them for
+                # running apps like the folder's own subtree, and count them (non-nested ones are not
+                # part of the folder's own size; nested ones are inside another root that is).
+                inner = [x for x in roots if x.get("path") and _inside_or_equal(_norm(x["path"]), path)]
+                for x in inner:
+                    sub = self._running_in_subtree(x, x.get("app"))
+                    if sub is not None:
+                        raise ApiError(HTTPStatus.CONFLICT, "contains %s (scanned separately) with data of %s, "
+                                       "which is running — quit it first" % (x.get("label"), sub.get("name") or "a running app"))
+                inner_size = sum(int(x.get("size") or 0) for x in inner if not x.get("nested_in"))
                 if safety == "danger" and not force:
                     raise ApiError(HTTPStatus.CONFLICT, "marked as dangerous; confirm with force",
                                    needs_force=True)
             started_at = time.time()
-            res = trash_mod.move_to_trash(path, root_paths, size=size)
+            res = trash_mod.move_to_trash(path, root_paths, size=size + inner_size)
             if not res.get("ok"):
                 raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, res.get("error") or "move to Trash failed")
             change = {"kind": "trash", "path": path, "size": size, "files": files, "started_at": started_at}
@@ -588,6 +605,7 @@ class App:
                     if cur is r:
                         self._remove_from_tree(cur, path, size, files)
                         self._prune_lists(cur, path)
+                        self._drop_roots_inside(cur, path)
                     elif cur is not None:  # a scan replaced the result while Finder was moving the item
                         rescan = self._replay([change], cur, r)
                     if cur is not None:
@@ -600,7 +618,7 @@ class App:
                     warning = "the view could not be updated (%s: %s); rescanning" % (type(e).__name__, e)
                 summary = (self.result or {}).get("summary")
         self.request_rescan(rescan)
-        out = {"ok": True, "freed": size, "summary": summary, "method": res.get("method"),
+        out = {"ok": True, "freed": size + inner_size, "summary": summary, "method": res.get("method"),
                "trashed_to": res.get("trashed_to")}
         if rescan:
             out["rescan"] = rescan

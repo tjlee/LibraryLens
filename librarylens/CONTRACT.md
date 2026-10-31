@@ -288,6 +288,8 @@ Actions:
   After success: rescan only the affected root (`only=[label]`) in the background. A partial scan gets a
   private copy of the result as `prev`; trashes made while a scan runs are replayed onto its result
   (roots whose walk overlapped the trash are rescanned), and the trash response lists any `"rescan"`.
+  Trashing a folder that contains other roots moves them too: they are checked for running apps,
+  counted in `freed` and dropped from the result.
 - UI: new **Disk** tab (default) with the stacked bar from `summary.disk_segments` + volume/snapshot list
   + "unaccounted" explanation (other users' homes unreadable without admin, snapshots, purgeable);
   **Big files** tab (`result.big_files`, Reveal/Trash); **Git repos** tab (`result.git_repos` with sizes,
