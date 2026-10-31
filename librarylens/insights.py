@@ -898,7 +898,7 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
         "actions_blocked_frees": act_sums["blocked"],
         "by_flag": {f: sum(_size(n) for n in dedupe_by_prefix(flagged[f])) for f in FLAG_ORDER},
         "by_category": by_category,
-        "by_kind": by_kind_totals(kind_nodes, specials),
+        "by_kind": by_kind_totals(kind_nodes, [s for s in specials if not s.get("installed")]),
         "regenerable_total": sum(v for c, v in by_category.items() if c in REGENERABLE_CATEGORIES),
         "candidate_count": len(maximal),
         "action_count": action_count,

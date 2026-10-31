@@ -28,6 +28,11 @@ DOWNLOADS_REL = "Downloads"
 BUILD_NAMES = {"node_modules", "target", "build", "out", ".gradle", ".venv", "venv", "DerivedData",
                ".next", ".nuxt", "dist", ".tox", ".pytest_cache", "__pycache__", "bazel-out"}
 VM_SUFFIXES = (".pvm", ".utm", ".vmwarevm", ".vbox")
+# Build-output-looking folders (node_modules, dist, ...) that ship with installed software rather than
+# being rebuilt by the user: global npm packages (dev_cache roots /opt, /usr/local), app data, hidden
+# home folders (~/.vscode/extensions) and app bundles. Same rule as insights.is_installed_build.
+INSTALL_ROOTS = ("/opt", "/usr/local")
+INSTALLED_CATEGORIES = frozenset({"app_support", "container", "group_container"})
 OWN_KEYS = ("kind", "details", "actions")
 
 TIME_BUDGET_S = 4.0           # after this, git details are computed in "light" mode (no loose objects)
@@ -309,6 +314,16 @@ def _ios_details(path: str) -> dict:
 # annotate
 # --------------------------------------------------------------------------------------------------
 
+def _installed_software(path: str, root: Optional[dict], home: str) -> bool:
+    if root is None:
+        return ".app/" in path
+    cat = root.get("category") or "other"
+    if ".app/" in path or cat in INSTALLED_CATEGORIES or \
+            (cat == "dev_cache" and os.path.normpath(root.get("path") or "") in INSTALL_ROOTS):
+        return True
+    return cat == "home" and path.startswith(home + "/") and path[len(home) + 1:].startswith(".")
+
+
 def _specials(result: dict, idx: Dict[str, List[dict]]) -> List[dict]:
     seen = {}
     for sp in result.get("special") or []:
@@ -356,6 +371,17 @@ def annotate(result: dict, now: Optional[float] = None) -> None:
     _set(idx, dl, "downloads", {"label": DOWNLOADS_REL})
 
     specials = _specials(result, idx)
+    roots_by_label = {r.get("label"): r for r in result.get("roots") or [] if isinstance(r, dict)}
+    installed = set()
+    for sp in specials:
+        if sp["kind"] == "build_output" and _installed_software(sp["path"], roots_by_label.get(sp.get("root")), home):
+            installed.add(sp["path"])
+    for e in result.get("special") or []:  # marked for insights' by_kind; recomputed on every run
+        if isinstance(e, dict):
+            if e.get("kind") == "build_output" and os.path.normpath(str(e.get("path") or "")) in installed:
+                e["installed"] = True
+            else:
+                e.pop("installed", None)
     git_specials = [s for s in specials if s["kind"] in ("git_dir", "git_repo")]
     procs = actions.git_processes() if git_specials else []
 
@@ -402,6 +428,8 @@ def annotate(result: dict, now: Optional[float] = None) -> None:
     for sp in specials:
         kind = sp["kind"]
         p = sp["path"]
+        if kind == "build_output" and p in installed:
+            continue  # part of installed software: neither build output nor a project
         if kind == "build_output":
             proj = os.path.dirname(p)
             pm = _project_mtime(proj, idx)

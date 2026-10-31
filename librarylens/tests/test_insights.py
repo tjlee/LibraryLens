@@ -736,6 +736,13 @@ class InsightsV2Test(unittest.TestCase):
             self.assertNotIn("regenerable", x["flags"], p)
             self.assertNotIn("Build output", x["reason"], p)
 
+    def test_by_kind_skips_specials_of_installed_software(self) -> None:
+        r = make_v2()
+        r["special"].append({"path": "/opt/homebrew/lib/node_modules", "kind": "build_output", "size": int(7 * G),
+                             "files": 9, "mtime": OLD, "root": "/opt", "installed": True})
+        insights.annotate(r, stale_days=90, now=NOW)
+        self.assertEqual(r["summary"]["by_kind"]["build_output"], self.s["by_kind"]["build_output"])
+
     def test_installed_software(self) -> None:
         hb = self.f("/opt/homebrew")
         self.assertEqual(hb["safety"], "caution")

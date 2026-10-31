@@ -55,6 +55,9 @@ class DetectorsTest(unittest.TestCase):
         with open(os.path.join(self.vm, "harddisk.hdd", "DiskDescriptor.xml"), "w") as f:
             f.write("<Snapshots><Shot><GUID>a</GUID></Shot><Shot><GUID>b</GUID></Shot></Snapshots>")
         put(os.path.join(self.vm, "x.mem"), 1000, mtime=OLD)
+        self.ext_nm = os.path.join(h, ".vscode", "extensions", "ms-python.python", "node_modules")
+        self.app_nm = os.path.join(h, "Applications", "WebStorm.app", "Contents", "plugins", "node_modules")
+        self.as_nm = os.path.join(self.tmp, "as", "Code", "User", "node_modules")
         self.result = self.build_result()
 
     def build_result(self) -> dict:
@@ -75,6 +78,7 @@ class DetectorsTest(unittest.TestCase):
              "is_dir": False},
         ], label="Home", category="home", nested_in=None)
         mail = node(os.path.join(h, "Library", "Mail"), 10, label="Mail", category="other", nested_in=None)
+        tree["children"].append(node(os.path.join(h, ".vscode"), 5, [node(self.ext_nm, 5)]))
         special = [
             {"path": self.gd, "kind": "git_dir", "size": 700, "files": 10, "mtime": 0, "root": "Home"},
             {"path": self.bare, "kind": "git_dir", "size": 5, "files": 10, "mtime": 0, "root": "Home"},
@@ -85,7 +89,11 @@ class DetectorsTest(unittest.TestCase):
              "mtime": 0, "root": "Home"},
             {"path": self.vm, "kind": "vm", "size": 300, "files": 3, "mtime": 0, "root": "Home"},
         ]
-        return {"home": h, "roots": [tree, mail], "special": special}
+        # build-output-looking folders of installed software: an editor extension, an app bundle and app data
+        special += [{"path": p, "kind": "build_output", "size": 5, "files": 1, "mtime": 0, "root": root}
+                    for p, root in ((self.ext_nm, "Home"), (self.app_nm, "Home"), (self.as_nm, "AS"))]
+        support = node(os.path.join(self.tmp, "as"), 5, label="AS", category="app_support", nested_in=None)
+        return {"home": h, "roots": [tree, mail, support], "special": special}
 
     def find(self, path: str) -> dict:
         stack = list(self.result["roots"])
@@ -165,6 +173,16 @@ class DetectorsTest(unittest.TestCase):
         self.assertEqual([b["name"] for b in up["build_outputs"]], ["out", "node_modules"])
         self.assertIn(os.path.dirname(self.deep_gd), projects)
         self.assertNotIn(self.bare, projects)
+
+    def test_installed_software_is_not_build_output(self) -> None:
+        detectors.annotate(self.result)
+        self.assertEqual(self.find(os.path.join(self.proj, "node_modules"))["kind"], "build_output")
+        self.assertNotIn("kind", self.find(self.ext_nm))
+        projects = {p["path"] for p in self.result["projects"]}
+        for p in (self.ext_nm, self.app_nm, self.as_nm):
+            self.assertNotIn(os.path.dirname(p), projects, p)
+        marked = {e["path"] for e in self.result["special"] if e.get("installed")}
+        self.assertEqual(marked, {self.ext_nm, self.app_nm, self.as_nm})
 
     def test_reannotate_clears_stale_keys_and_reflects_changes(self) -> None:
         detectors.annotate(self.result)

@@ -246,6 +246,9 @@ Sets on nodes (tree nodes at the matching path, if present) and builds `result["
   vm: `{"vm_name","last_used","snapshots": n}`; build_output: `{"project","project_mtime"}`.
 - `node["actions"]`: list of available actions (see below), only for kinds that have them.
 - `result["git_repos"]`: list of the git `details` dicts (+ `"path"` of the work tree, `"size"` of .git).
+- Build-output-looking folders of installed software (dev_cache roots `/opt`, `/usr/local`, app data,
+  hidden home folders, `*.app` bundles) get no kind and no project; their `special` entry gets
+  `"installed": true` and is left out of `summary["by_kind"]`.
 Must be fast (< 5 s total; filesystem reads only on special dirs, not the whole tree).
 
 ## Actions (agent C, `actions.py`) — allow-listed operations besides Move to Trash
