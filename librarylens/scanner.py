@@ -28,6 +28,7 @@ import json
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable, Deque, Dict, List, Optional, Set, Tuple
@@ -1103,11 +1104,16 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
 
 
 def save_cache(result: dict) -> None:
-    """Atomically write ``result`` to ~/.librarylens/scan.json (compact JSON)."""
+    """Atomically write ``result`` to ~/.librarylens/scan.json (compact JSON, owner-only).
+
+    Safe to call from several threads at once (the server saves from scan and trash/action threads):
+    every call writes its own temp file, so the cache is always one complete result. Which concurrent
+    call wins is up to the caller; the server saves again when it swaps in a new result."""
     os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = "%s.%d.tmp" % (CACHE_FILE, os.getpid())
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(CACHE_FILE) + ".", suffix=".tmp",
+                               dir=os.path.dirname(CACHE_FILE))
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(fd, "w", encoding="utf-8") as f:
             json.dump(result, f, separators=(",", ":"))
             f.flush()
             os.fsync(f.fileno())

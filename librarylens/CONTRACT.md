@@ -85,7 +85,7 @@ def default_roots() -> list[dict]          # [{"label","path","category"}], only
 def scan_path(path: str, max_depth: int = 3, min_size: int = 1 << 20) -> dict   # Node
 def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int = 8,
              progress: Callable[[str], None] | None = None) -> dict              # ScanResult (no summary yet)
-def save_cache(result: dict) -> None       # ~/.librarylens/scan.json (atomic write)
+def save_cache(result: dict) -> None       # ~/.librarylens/scan.json (atomic, owner-only, thread-safe)
 def load_cache() -> dict | None
 def find_node(result: dict, path: str) -> dict | None
 ```
