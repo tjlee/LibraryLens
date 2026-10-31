@@ -139,10 +139,13 @@ class Stubs:
         self.action_gate.set()
         self.action_result = {"ok": True, "error": None, "freed": 3000, "details": {"deleted": 2}}
         self.running_now = {}       # app name -> running, applied by the resolver stub (as ps would)
+        self.resolver_calls = 0
+        self.forgotten = []         # roots whose hard-link claims the server told the scanner to forget
         self.walk_s = 0.0           # how long each rescanned root's walk takes (its duration_s)
         self.ignore_cancel = False  # True: like the pipeline phases after the walk, which never check it
         self.scanner = types.SimpleNamespace(find_node=fake_find_node, save_cache=self.saved.append,
-                                             load_cache=lambda: None, Cancelled=Cancelled)
+                                             load_cache=lambda: None, Cancelled=Cancelled,
+                                             forget_shared_links=self.forgotten.append)
         self.pipeline = types.SimpleNamespace(run=self.pipeline_run, reannotate=self.reannotate)
         self.insights = types.SimpleNamespace(annotate=fake_insights_annotate)
         self.resolver = types.SimpleNamespace(annotate=self.resolver_annotate)
@@ -174,6 +177,7 @@ class Stubs:
 
     def resolver_annotate(self, r):
         # fresh `running` flags, and the in_use that insights derives from them for these fixtures
+        self.resolver_calls += 1
         for root in r["roots"]:
             for n in _walk(root):
                 a = n.get("app")
@@ -397,6 +401,31 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200, j)
         self.assertEqual([t[0] for t in self.stubs.trashed], [L + "/Caches/JetBrains/IntelliJIdea2027.1"])
 
+    def test_cheap_refusals_come_before_the_running_app_check(self):
+        for p, code in ((L + "/Caches/nope", 404), (self.GIT, 409), (L + "/Caches", 403)):
+            status, _ = self.jreq("POST", "/api/trash", {"path": p})
+            self.assertEqual(status, code, p)
+        self.assertEqual(self.stubs.resolver_calls, 0)  # no `ps` for requests that were refused anyway
+
+    def test_trash_at_a_roots_real_path_refused(self):
+        # a root under a symlinked path appears in other roots' trees at its real path
+        docker = next(x for x in self.app.result["roots"] if x["label"] == "Docker")
+        docker["real"] = L + "/Caches/com.example.tool"
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 403, j)
+        self.assertIn("scan root", j["error"])
+        self.assertEqual(self.stubs.trashed, [])
+
+    def test_trash_makes_the_scanner_forget_hard_link_claims_of_changed_roots(self):
+        caches = next(x for x in self.app.result["roots"] if x["label"] == "Caches")
+        caches["shared_hardlinks"] = 2
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(self.stubs.forgotten, [L + "/Caches"])
+        status, j = self.jreq("POST", "/api/trash", {"path": H + "/IdeaProjects/ultimate/out"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(self.stubs.forgotten, [L + "/Caches"])  # Home has no shared hard links
+
     def test_trash_running_descendant_with_inherited_app_refused(self):
         # the running node has no "app" of its own; that must not read as "nothing is running"
         self.find(H + "/IdeaProjects/ultimate/out", "Home")["in_use"] = True
@@ -610,6 +639,7 @@ class ServerTest(unittest.TestCase):
         self.assertNotIn(p, [e["path"] for e in self.app.result["special"]])
         self.assertEqual(self.app.rescan_log, [])
         self.assertIs(self.stubs.saved[-1], self.app.result)  # saved again: the cache matches the view
+        self.assertEqual(self.stubs.reannotated, 1)  # the trash's own; the swap only re-summarises
 
     def test_trash_in_root_walked_before_the_trash_is_replayed(self):
         p = L + "/Caches/com.example.tool"
@@ -658,6 +688,26 @@ class ServerTest(unittest.TestCase):
         self.join_scans()
         self.assertEqual(self.app.rescan_log, [["Caches"]])
         self.assertEqual(self.stubs.runs[1]["only"], ["Caches"])
+
+    def test_cancel_keeps_the_rescan_a_trash_asked_for(self):
+        def slow_move(path, allowed_roots, size=None):  # scan 1 lands, scan 2 starts, while Finder works
+            self.app.start_scan()
+            self.app.scan_thread.join(5)
+            self.stubs.scan_gate.clear()
+            self.app.start_scan()
+            return {"ok": True, "error": None, "method": "finder", "trashed_to": H + "/.Trash/x"}
+        self.stubs.trash.move_to_trash = slow_move
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(j["rescan"], ["Caches"])
+        self.assertEqual(self.app.status_json()["pending_rescan"], ["Caches"])
+        status, _ = self.jreq("POST", "/api/scan/cancel", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.app.status_json()["pending_rescan"], ["Caches"])  # a repair: kept
+        self.stubs.scan_gate.set()
+        self.assertTrue(self.wait_for(lambda: len(self.stubs.runs) == 3))
+        self.join_scans()
+        self.assertEqual(self.stubs.runs[2]["only"], ["Caches"])
 
     def test_action_spanning_a_scan_leaves_the_new_result_alone(self):
         self.stubs.action_gate.clear()

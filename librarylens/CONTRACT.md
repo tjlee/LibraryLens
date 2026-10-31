@@ -142,7 +142,8 @@ Real findings that motivated this (use them as test expectations):
 | `detectors.py` (new), `actions.py` (new) | agent C |
 | `server.py`, `trash.py`, `static/index.html` (v2) | agent D |
 
-New import rules: `server.py` imports `pipeline`, `scanner`, `insights`, `actions`, `trash`, `disk`.
+New import rules: `server.py` imports `pipeline`, `scanner`, `insights`, `actions`, `trash`, `disk`,
+`resolver` (to re-check running apps before a trash).
 `pipeline.py` imports scanner, disk, resolver, detectors, insights. `disk`, `detectors`, `actions` import
 nothing from the package. Keep existing tests passing (update them if a contract change requires it).
 
