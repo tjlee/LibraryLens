@@ -293,6 +293,21 @@ class AnnotateTest(unittest.TestCase):
         self.assertNotIn(f"{C}/Homebrew", paths)
         self.assertEqual(paths.count(f"{C}/Homebrew/downloads"), 1)
 
+    def test_nested_root_at_its_real_path_is_not_a_candidate(self) -> None:
+        # ~/.cache -> ~/Library/Caches/dotcache: the "Bazel cache" root (~/.cache/bazel) shows up in the
+        # Caches tree as .../dotcache/bazel
+        dot = f"{C}/dotcache"
+        r = {"roots": [
+            root("Caches", "cache", n(C, 3 * GB, children=[n(dot, 3 * GB, mtime=OLD, children=[
+                n(f"{dot}/bazel", 2 * GB, mtime=OLD), n(f"{dot}/other", 1 * GB)])])),
+            dict(root("Bazel cache", "bazel", n(f"{H}/.cache/bazel", 2 * GB, mtime=OLD), nested_in="Caches"),
+                 real=f"{dot}/bazel"),
+        ]}
+        find(r, dot)["mtime"] = FRESH  # a fresh sibling keeps dotcache itself from being the candidate
+        insights.annotate(r, now=NOW)
+        self.assertNotIn(f"{dot}/bazel", [c["path"] for c in r["summary"]["top_candidates"]])
+        self.assertIn("Bazel", find(r, f"{dot}/bazel", "Caches")["reason"])  # rated like the nested root
+
     def test_orphaned_docker_container_counted_once(self) -> None:
         r = make_result()
         r["roots"][2]["children"][0]["app"]["installed"] = False

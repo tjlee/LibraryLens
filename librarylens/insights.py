@@ -788,11 +788,12 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
     roots: List[Node] = result.get("roots") or []
     # Paths of nested roots -> (category, name): reached via the parent root, the subtree
     # takes the nested root's category so both views annotate it the same way.
-    nested = {_path_key(r["path"]): (r.get("category") or "other", r.get("name") or "")
-              for r in roots if r.get("nested_in") and r.get("path")}
+    # A root under a symlinked path shows up in other roots' trees at its "real" path.
+    nested = {_path_key(p): (r.get("category") or "other", r.get("name") or "")
+              for r in roots if r.get("nested_in") for p in (r.get("path"), r.get("real")) if p}
     # Move to Trash refuses scan roots (a nested root also appears inside its parent's tree) and git
     # internals, also where the git dir is rated as plain cache (Cargo git db): never suggest those.
-    root_keys = {_path_key(r["path"]) for r in roots if r.get("path")}
+    root_keys = {_path_key(p) for r in roots for p in (r.get("path"), r.get("real")) if p}
 
     candidates: List[Node] = []
     flagged: Dict[str, List[Node]] = {f: [] for f in FLAG_ORDER}
