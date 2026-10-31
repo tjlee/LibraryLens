@@ -137,6 +137,8 @@ class Stubs:
         self.action_gate = threading.Event()
         self.action_gate.set()
         self.action_result = {"ok": True, "error": None, "freed": 3000, "details": {"deleted": 2}}
+        self.walk_s = 0.0           # how long each rescanned root's walk takes (its duration_s)
+        self.ignore_cancel = False  # True: like the pipeline phases after the walk, which never check it
         self.scanner = types.SimpleNamespace(find_node=fake_find_node, save_cache=self.saved.append,
                                              load_cache=lambda: None, Cancelled=Cancelled)
         self.pipeline = types.SimpleNamespace(run=self.pipeline_run, reannotate=self.reannotate)
@@ -147,15 +149,18 @@ class Stubs:
 
     def pipeline_run(self, prev=None, only=None, max_depth=3, progress=None, cancel=None):
         self.runs.append({"prev": prev, "only": only, "max_depth": max_depth})
+        t0 = time.time()
         if progress:
             progress("phase:scan")
             progress(L + "/Caches")
         while not self.scan_gate.wait(0.01):
-            if cancel is not None and cancel.is_set():
+            if cancel is not None and cancel.is_set() and not self.ignore_cancel:
                 raise Cancelled("scan cancelled")
         r = fixture()
         r.pop("summary")
         r["scanned_at"] = 42.0
+        for n in r["roots"]:  # walked roots, as scan_all marks them; copied ones keep prev's
+            n["scanned_at"], n["duration_s"] = t0, self.walk_s
         if only and prev:
             r["roots"] = [n if n["label"] in only else o for n, o in zip(r["roots"], prev["roots"])]
         if progress:
@@ -398,6 +403,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(j["summary"]["reclaimable"], before["reclaimable"] - 3800)
         self.assertNotIn(p, [c["path"] for c in j["summary"]["top_candidates"]])
         self.assertEqual(len(self.stubs.saved), 1)
+        self.assertNotIn("rescan", j)  # no scan running: nothing to rescan
+        self.assertEqual(self.app.rescan_log, [])
         # served result reflects the change
         status, scan = self.jreq("GET", "/api/scan")
         self.assertEqual(scan["summary"]["total"], before["total"] - 3800)
@@ -479,7 +486,8 @@ class ServerTest(unittest.TestCase):
         self.join_scans()
         run = self.stubs.runs[-1]
         self.assertEqual(run["only"], ["Caches"])
-        self.assertIs(run["prev"], old)
+        self.assertIsNot(run["prev"], old)  # a private copy, see test_trash_during_partial_scan_...
+        self.assertEqual(run["prev"], old)
         status, s = self.jreq("GET", "/api/status")
         self.assertEqual(s["state"], "done")
         self.assertFalse(s["cancelled"])
@@ -529,6 +537,97 @@ class ServerTest(unittest.TestCase):
         self.join_scans()
         self.assertEqual(self.stubs.runs[1]["only"], ["Home"])
         self.assertEqual(self.app.status_json()["pending_rescan"], [])
+
+    def trash_during_scan(self, only, path):
+        self.stubs.scan_gate.clear()
+        status, _ = self.jreq("POST", "/api/scan", {"only": only})
+        self.assertEqual(status, 202)
+        self.assertTrue(self.wait_for(lambda: self.stubs.runs))
+        status, j = self.jreq("POST", "/api/trash", {"path": path})
+        self.assertEqual(status, 200, j)
+        return j
+
+    def test_trash_during_partial_scan_is_replayed_on_copied_roots(self):
+        p = H + "/IdeaProjects/ultimate/out"
+        j = self.trash_during_scan(["Caches"], p)
+        prev = self.stubs.runs[-1]["prev"]
+        # scan_all copies the roots it doesn't rescan from prev while trash mutates the live result
+        self.assertIsNot(prev, self.app.result)
+        self.assertIsNotNone(fake_find_node(prev, p))
+        self.assertNotIn("rescan", j)
+        self.stubs.scan_gate.set()
+        self.join_scans()
+        self.assertEqual(self.app.result["scanned_at"], 42.0)  # the scan's result is swapped in...
+        self.assertIsNone(self.find(p, "Home"))  # ...with the trash replayed onto its copy of Home
+        self.assertEqual(self.find(H, "Home")["size"], 9000)
+        self.assertNotIn(p, [e["path"] for e in self.app.result["special"]])
+        self.assertEqual(self.app.rescan_log, [])
+        self.assertIs(self.stubs.saved[-1], self.app.result)  # saved again: the cache matches the view
+
+    def test_trash_in_root_walked_before_the_trash_is_replayed(self):
+        p = L + "/Caches/com.example.tool"
+        self.trash_during_scan(["Caches"], p)
+        self.stubs.scan_gate.set()
+        self.join_scans()
+        self.assertIsNone(self.find(p, "Caches"))
+        self.assertEqual(self.find(L + "/Caches", "Caches")["size"], 700)
+        self.assertEqual(self.app.rescan_log, [])
+
+    def test_trash_in_root_walked_during_the_trash_is_rescanned(self):
+        self.stubs.walk_s = 3600.0  # the walk of Caches may or may not have counted the item
+        self.trash_during_scan(["Caches"], L + "/Caches/com.example.tool")
+        self.stubs.scan_gate.set()
+        self.assertTrue(self.wait_for(lambda: len(self.stubs.runs) == 2))
+        self.join_scans()
+        self.assertEqual(self.app.rescan_log, [["Caches"]])
+        self.assertEqual(self.stubs.runs[1]["only"], ["Caches"])
+
+    def test_trash_then_cancel_that_comes_too_late(self):
+        # the cancel lands in a phase that doesn't check it: the scan still finishes and is swapped in
+        self.stubs.ignore_cancel = True
+        self.stubs.walk_s = 3600.0
+        out, tool = H + "/IdeaProjects/ultimate/out", L + "/Caches/com.example.tool"
+        self.trash_during_scan(["Caches"], out)
+        status, j = self.jreq("POST", "/api/trash", {"path": tool})
+        self.assertEqual(status, 200, j)
+        status, _ = self.jreq("POST", "/api/scan/cancel", {})
+        self.assertEqual(status, 200)
+        self.stubs.scan_gate.set()
+        self.assertTrue(self.wait_for(lambda: len(self.stubs.runs) == 2))
+        self.join_scans()
+        self.assertIsNone(self.find(out, "Home"))  # replayed: the trashed folder doesn't come back
+        self.assertEqual(self.stubs.runs[1]["only"], ["Caches"])  # the follow-up survives the cancel
+
+    def test_trash_finishing_after_a_scan_replaced_the_result_rescans(self):
+        def slow_move(path, allowed_roots, size=None):  # a whole scan lands while Finder is working
+            self.app.start_scan()
+            self.app.scan_thread.join(5)
+            return {"ok": True, "error": None, "method": "finder", "trashed_to": H + "/.Trash/x"}
+        self.stubs.trash.move_to_trash = slow_move
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/com.example.tool"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual(j["rescan"], ["Caches"])  # the new result was walked while Finder worked
+        self.assertTrue(self.wait_for(lambda: len(self.stubs.runs) == 2))
+        self.join_scans()
+        self.assertEqual(self.app.rescan_log, [["Caches"]])
+        self.assertEqual(self.stubs.runs[1]["only"], ["Caches"])
+
+    def test_action_spanning_a_scan_leaves_the_new_result_alone(self):
+        self.stubs.action_gate.clear()
+        status, j = self.jreq("POST", "/api/action", {"path": self.GIT, "action": "git_gc", "confirm": True})
+        self.assertEqual(status, 202, j)
+        self.app.start_scan()  # a full scan lands while gc runs; it may already show gc's effect
+        self.app.scan_thread.join(5)
+        self.stubs.scan_gate.clear()  # hold the action's follow-up rescan
+        self.stubs.action_gate.set()
+        jid = j["job"]["id"]
+        self.assertTrue(self.wait_for(lambda: self.app.job_by_id(jid)["state"] == "done"))
+        self.assertTrue(self.wait_for(lambda: self.app.job_by_id(jid)["rescan"] is not None))
+        self.assertEqual(self.find(H, "Home")["size"], 10000)  # not shrunk a second time
+        self.assertEqual(self.app.result["git_repos"][0]["size"], 8000)
+        self.assertEqual(self.app.job_by_id(jid)["rescan"], ["Home"])
+        self.stubs.scan_gate.set()
+        self.join_scans()
 
     # ---- iteration 2: disk ----
     def test_disk_overview_cached(self):
