@@ -318,6 +318,11 @@ def fresh_locks(git_dir: str, now: Optional[float] = None) -> List[str]:
     return found
 
 
+# git(1) global options whose value is the next argument (``--git-dir=<path>`` style is handled too)
+_GIT_OPTS_WITH_ARG = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                                "--config-env", "--attr-source"})
+
+
 def _parse_git_command(cmd: str) -> Optional[dict]:
     """Recognise a git process from its `ps` command line -> {"sub", "C", "git_dir"} or None."""
     toks = cmd.split()
@@ -328,9 +333,11 @@ def _parse_git_command(cmd: str) -> Optional[dict]:
             info = {"sub": None, "C": None, "git_dir": None}
             while j < len(toks):
                 a = toks[j]
-                if a in ("-C", "-c") and j + 1 < len(toks):
+                if a in _GIT_OPTS_WITH_ARG and j + 1 < len(toks):
                     if a == "-C":
                         info["C"] = toks[j + 1]
+                    elif a == "--git-dir":
+                        info["git_dir"] = toks[j + 1]
                     j += 2
                     continue
                 if a.startswith("--git-dir="):

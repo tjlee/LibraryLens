@@ -99,6 +99,10 @@ class RegexTest(unittest.TestCase):
         self.assertEqual(p("/Library/Developer/CommandLineTools/usr/libexec/git-core/git pack-objects --local")
                          ["sub"], "pack-objects")
         self.assertEqual(p("git-remote-https origin https://x")["sub"], "remote-https")
+        # global options with a separate value must not be taken for the subcommand
+        self.assertEqual(p("git --git-dir /x/.git fetch origin"), {"sub": "fetch", "C": None, "git_dir": "/x/.git"})
+        self.assertEqual(p("/usr/bin/git --work-tree /w --namespace ns -c a=b gc --auto")["sub"], "gc")
+        self.assertEqual(p("git --git-dir=/x/.git index-pack --stdin")["git_dir"], "/x/.git")
         self.assertIsNone(p("/bin/zsh -c echo git fetch"))
         self.assertIsNone(p("vim notes-about-git"))
 
