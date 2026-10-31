@@ -897,6 +897,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request body too large")
         raw = self.rfile.read(n) if n else b""
+        self._body_read = True
         if not raw.strip():
             return {}
         try:
@@ -954,6 +955,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard():
             return
         path = self.path.split("?", 1)[0]
+        self._body_read = False
         try:
             if not self._origin_ok():
                 raise ApiError(HTTPStatus.FORBIDDEN, "bad Origin")
@@ -985,6 +987,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             traceback.print_exc()
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "%s: %s" % (type(e).__name__, e))
+        finally:
+            if not self._body_read:  # rejected before reading it: the body would be parsed as the next request
+                self.close_connection = True
 
 
 class _Server(ThreadingHTTPServer):

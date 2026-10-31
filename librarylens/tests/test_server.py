@@ -4,6 +4,7 @@ import copy
 import gzip
 import http.client
 import json
+import socket
 import threading
 import time
 import types
@@ -306,6 +307,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 413)
         status, _ = self.jreq("POST", "/api/trash", raw=b"not json")
         self.assertEqual(status, 400)
+        self.assertEqual(self.stubs.trashed, [])
+
+    def test_rejected_post_does_not_desync_keep_alive(self):
+        # a POST refused before its body is read, then a GET on the same connection
+        body = json.dumps({"path": L + "/Caches/com.example.tool"}).encode()
+        reqs = (b"POST /api/trash HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: http://evil.example\r\n"
+                b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s"
+                b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n") % (self.port, len(body), body, self.port)
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+            s.sendall(reqs)
+            data = b""
+            try:
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+            except socket.timeout:
+                pass
+        self.assertTrue(data.startswith(b"HTTP/1.1 403"), data[:80])
+        self.assertNotIn(b"501", data)  # the body was not parsed as a request
+        self.assertEqual(data.count(b"HTTP/1."), 1)  # the server closed the connection instead
         self.assertEqual(self.stubs.trashed, [])
 
     def test_get_scan_returns_fixture_plain_and_gzip(self):
