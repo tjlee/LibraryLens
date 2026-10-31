@@ -131,7 +131,9 @@ python3 -m librarylens.disk                          # disk overview as JSON
   location's root, anything outside the scanned locations, anything inside a `.git` folder or a bare
   repository, and anything an app is using right now (checked again at that moment, not taken from the
   scan). These checks ignore letter case, as APFS does.
-- **Scans never follow symlinks** and never cross into other volumes.
+- **Scans never follow symlinks** (except a scanned location that is itself a symlink to a folder on
+  the same disk, such as `~/.gradle` pointing elsewhere in your home) and never cross into other
+  volumes.
 - **Local only.** The server listens on `127.0.0.1` only, checks the `Host` header, and accepts
   changes only with a token that is generated per run and embedded in the page.
 - **Audit log.** Every trash and git action, successful or not, is appended as one JSON line to

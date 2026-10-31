@@ -6,7 +6,8 @@ per-root ``scanned_at``/``duration_s``, ``big_files``, ``special``, partial
 rescans via ``only``/``prev``, cancellation).
 
 Sizes are ALLOCATED bytes (``st_blocks * 512``) so sparse files (Docker.raw)
-and APFS are reported as they really cost. Symlinks are never followed,
+and APFS are reported as they really cost. Symlinks are never followed (except
+a root of scan_all that is itself a symlink to a folder on the same volume),
 filesystem boundaries are never crossed, and hard-linked files are counted once.
 Nothing is ever escalated: unreadable directories just get ``error`` set.
 
@@ -150,7 +151,6 @@ def default_roots() -> list[dict]:
     """
     out: list[dict] = []
     seen_real: set = set()
-    home_dev = _dev(os.path.expanduser("~"))
     for label, template, category in _CANDIDATES:
         path = _expand(template)
         if not os.path.exists(path):
@@ -159,10 +159,6 @@ def default_roots() -> list[dict]:
         if real in seen_real:
             continue
         seen_real.add(real)
-        if os.path.islink(path) and os.path.isdir(real) and _dev(real) == home_dev:
-            # e.g. ~/.gradle -> ~/dev/gradle-home: the walker never follows symlinks, and the root
-            # that contains the target excludes it, so scan the target itself or nobody counts it.
-            path = real
         out.append({"label": label, "path": path, "category": category, "exclude": []})
     for r in out:
         if r["label"] not in _EXCLUDE_INNER:
@@ -172,13 +168,6 @@ def default_roots() -> list[dict]:
                   if o is not r and _is_within(os.path.realpath(o["path"]), real)]
         r["exclude"] = _outermost(inside)
     return out
-
-
-def _dev(path: str) -> Optional[int]:
-    try:
-        return os.stat(path).st_dev
-    except OSError:
-        return None
 
 
 def _excludes(excl_reals: List[str], real: str) -> bool:
@@ -260,6 +249,7 @@ _DIRATTR_OK = 0x4 | 0x8     # ATTR_DIR_MOUNTSTATUS | ATTR_DIR_ALLOCSIZE
 _FILEATTR_OK = 0x1 | 0x4    # ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE
 _O_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | \
     getattr(os, "O_CLOEXEC", 0)
+_O_DIR_FOLLOW = _O_DIR & ~getattr(os, "O_NOFOLLOW", 0)  # only for a root that is a followed symlink
 _UNSUPPORTED = {errno.ENOTSUP, errno.EINVAL, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
                 getattr(errno, "ENOSYS", errno.EINVAL)}
 
@@ -372,14 +362,17 @@ class _RootCtx:
     """Per-root walk state shared by all work items of that root."""
 
     __slots__ = ("label", "dev", "seen", "exclude", "home_gradle", "ios_parent", "big",
-                 "specials", "pending", "t_end", "links", "claimed")
+                 "specials", "pending", "t_end", "follow", "claimed", "met_elsewhere")
 
-    def __init__(self, label: str, dev: int, seen: set) -> None:
+    def __init__(self, label: str, dev: int, seen: set, met_elsewhere: Optional[set] = None) -> None:
         self.label = label
         self.dev = dev
         self.seen = seen
-        self.links: Dict[Tuple[int, int], int] = {}    # hard-linked inode -> links met in this root
-        self.claimed: Dict[Tuple[int, int], int] = {}  # ... counted by this root -> st_nlink
+        self.follow = b""  # the root's own path when it is a symlink that is walked through
+        # Hard links, for non-nested roots only (None otherwise): inode -> [st_nlink, links met here]
+        # for the ones this root counted, and the shared set of inodes met by a root that didn't.
+        self.claimed: Dict[Tuple[int, int], List[int]] = {}
+        self.met_elsewhere = met_elsewhere
         self.exclude: Dict[bytes, Dict[bytes, Optional[str]]] = {}  # parent -> {name: link label}
         self.home_gradle = b""
         self.ios_parent = b""
@@ -443,10 +436,16 @@ class _Walker:
     # -- setup ---------------------------------------------------------------
 
     def add_root(self, path: str, seen: set, label: str = "",
-                 exclude: Optional[Dict[str, Optional[str]]] = None) -> Tuple[_Acc, Optional[_RootCtx]]:
+                 exclude: Optional[Dict[str, Optional[str]]] = None,
+                 met_elsewhere: Optional[set] = None,
+                 follow_link: bool = False) -> Tuple[_Acc, Optional[_RootCtx]]:
         """Stat the root and enqueue it; returns its accumulator and walk context.
 
         ``exclude`` maps paths to skip -> label of the root that covers them (for stubs).
+        ``met_elsewhere``: shared set for hard-link bookkeeping of non-nested roots (see scan_all).
+        ``follow_link``: a root that is a symlink to a folder on the same volume (``~/.gradle ->
+        ~/dev/gradle-home``) is walked through the link (scan_all: the root that contains the target
+        excludes it, so otherwise nobody would count it). Paths keep the link (``~/.gradle/caches``).
         """
         path = os.path.abspath(path)
         acc = _Acc(path, os.path.basename(path.rstrip(os.sep)) or path, 0)
@@ -455,6 +454,14 @@ class _Walker:
         except OSError as exc:
             acc.error = _errmsg(exc)
             return acc, None
+        follow = False
+        if follow_link and st.st_mode & _S_IFMT == _S_IFLNK:
+            try:
+                tst = os.stat(path)
+                if tst.st_mode & _S_IFMT == _S_IFDIR and tst.st_dev == os.lstat(os.path.dirname(path)).st_dev:
+                    st, follow = tst, True
+            except OSError:
+                pass
         acc.mtime = st.st_mtime
         fmt = st.st_mode & _S_IFMT
         acc.size = st.st_blocks * 512
@@ -468,7 +475,9 @@ class _Walker:
                 except OSError:
                     acc.error = "symlink"
             return acc, None
-        rc = _RootCtx(label or acc.name, st.st_dev, seen)
+        rc = _RootCtx(label or acc.name, st.st_dev, seen, met_elsewhere)
+        if follow:
+            rc.follow = os.fsencode(path)
         gradle, ios = _special_paths()
         rc.home_gradle = os.fsencode(gradle)
         rc.ios_parent = os.fsencode(ios)
@@ -572,7 +581,7 @@ class _Walker:
         keep = item[3] and item[1] < self.max_depth
         p: Optional[_Pass] = None
         if tl is not None:
-            fd = os.open(path, _O_DIR)  # OSError -> _fail (error on the node)
+            fd = os.open(path, _O_DIR_FOLLOW if path == item[4].follow else _O_DIR)  # OSError -> _fail
             try:
                 p = self._list_bulk(fd, path, keep, item[4], tl)
             finally:
@@ -587,11 +596,17 @@ class _Walker:
         if nlink > 1:
             key = (rc.dev, ino)
             with self.lock:
-                rc.links[key] = rc.links.get(key, 0) + 1
                 if key in rc.seen:
+                    if rc.met_elsewhere is not None:
+                        c = rc.claimed.get(key)
+                        if c is not None:
+                            c[1] += 1
+                        else:
+                            rc.met_elsewhere.add(key)
                     return
                 rc.seen.add(key)
-                rc.claimed[key] = nlink
+                if rc.met_elsewhere is not None:
+                    rc.claimed[key] = [nlink, 1]
         p.size += b
         if isreg:
             p.files += 1
@@ -663,7 +678,7 @@ class _Walker:
                                              bulk["unpack"])
         lock = self.lock
         seen = rc.seen
-        links, claimed = rc.links, rc.claimed
+        claimed, elsewhere = rc.claimed, rc.met_elsewhere
         dev = rc.dev
         min_size = self.min_size
         rare_min = self.rare_min
@@ -716,11 +731,17 @@ class _Walker:
                 if lc > 1:
                     key = (dev, ino)
                     with lock:
-                        links[key] = links.get(key, 0) + 1
                         if key in seen:
+                            if elsewhere is not None:
+                                c = claimed.get(key)
+                                if c is not None:
+                                    c[1] += 1
+                                else:
+                                    elsewhere.add(key)
                             continue
                         seen.add(key)
-                        claimed[key] = lc
+                        if elsewhere is not None:
+                            claimed[key] = [lc, 1]
                 size += b
                 isreg = typ == _VREG
                 if isreg:
@@ -1082,9 +1103,10 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
     # from prev already counted its share, so seed the set with the hard-linked files it counted that
     # also have links elsewhere; if that is no longer known (another process made prev), rescan it too.
     shared_seen: set = set()
+    walks_flat = any(not nested[i] for i in to_scan)  # nested roots have their own sets
     for i in sorted(copied):
         pr = copied[i]
-        if nested[i] or not to_scan or not pr.get("shared_hardlinks"):
+        if nested[i] or not walks_flat or not pr.get("shared_hardlinks"):
             continue
         known = _SHARED_LINKS.get(roots[i]["path"])
         if known is not None and known[0] == pr.get("scanned_at"):
@@ -1095,11 +1117,13 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
     to_scan.sort()
 
     walker = _Walker(max_depth, min_size, workers, big_file_min, big_files_limit, cancel)
+    met_elsewhere: set = set()
     accs: Dict[int, Tuple[_Acc, Optional[_RootCtx]]] = {}
     for i in to_scan:
         r = roots[i]
         excl = {e: label_of_real.get(os.path.realpath(e)) for e in r["exclude"]}
-        accs[i] = walker.add_root(r["path"], set() if nested[i] else shared_seen, r["label"], excl)
+        accs[i] = walker.add_root(r["path"], set() if nested[i] else shared_seen, r["label"], excl,
+                                  None if nested[i] else met_elsewhere, follow_link=True)
     walker.run(progress)
     t_done = time.time()
 
@@ -1116,7 +1140,10 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
             end = rc.t_end if rc is not None and rc.t_end else t_done
             node["duration_s"] = round(max(0.0, end - t0), 3)
             if rc is not None and not nested[i]:
-                shared = frozenset(k for k, nl in rc.claimed.items() if rc.links.get(k, 0) < nl)
+                # counted here, links elsewhere too: in another walked root, or (copied roots were
+                # not walked) maybe in one of those. Links outside every root can't be counted twice.
+                shared = frozenset(k for k, (nl, met) in rc.claimed.items()
+                                   if met < nl and (copied or k in met_elsewhere))
                 node["shared_hardlinks"] = len(shared)
                 _SHARED_LINKS[r["path"]] = (t0, shared)
             if rc is not None:
@@ -1124,6 +1151,11 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
                     new_big.append({"path": p, "size": size, "mtime": mt, "root": r["label"]})
                 new_special.extend(s.as_dict() for s in rc.specials)
         node["label"] = r["label"]
+        real = os.path.realpath(r["path"])
+        if real != r["path"]:
+            node["real"] = real  # other roots' trees show it under this path
+        else:
+            node.pop("real", None)
         node["category"] = r.get("category") or "other"
         node["nested_in"] = nested[i]
         node["exclude"] = list(r["exclude"])
@@ -1143,6 +1175,12 @@ def scan_all(roots: list[dict] | None = None, max_depth: int = 3, workers: int =
     return {"scanned_at": t0, "duration_s": round(time.time() - t0, 3),
             "home": os.path.expanduser("~"), "roots": out_roots,
             "big_files": big, "special": special}
+
+
+def forget_shared_links(path: str) -> None:
+    """A root's tree changed outside a scan (e.g. a trash): what it counted is no longer known, so a
+    partial rescan that copies it rescans it too if it had shared hard links (see scan_all)."""
+    _SHARED_LINKS.pop(path, None)
 
 
 def save_cache(result: dict) -> None:

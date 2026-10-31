@@ -191,8 +191,12 @@ def scan_all(roots=None, max_depth=3, workers=8, progress=None, min_size=1<<20,
 ```
 - Each Root gets `"scanned_at"` and `"duration_s"` (per-root rescan merges into `prev`).
 - Each walked non-nested Root gets `"shared_hardlinks"`: how many hard-linked files it counted that also
-  have links outside it. A partial rescan treats those as already counted (the inodes are kept in
-  memory per process), or rescans that root too when they are not known (e.g. `prev` from the cache).
+  have links in another root. A partial rescan treats those as already counted (the inodes are kept in
+  memory per process), or rescans that root too when they are not known (e.g. `prev` from the cache,
+  or `scanner.forget_shared_links(path)` was called because a trash changed the root's tree).
+- A Root whose path contains a symlink gets `"real"` (its path with symlinks resolved), which is where it
+  appears in other roots' trees. A root that is itself a symlink to a folder on the same volume is
+  walked through the link (its node paths keep the link); other symlinks are never followed.
 - `result["big_files"]`: up to `big_files_limit` largest regular files ≥ `big_file_min` across all roots,
   sorted desc: `{"path","size","mtime","root": label}` (collected during the walk, heap-based).
 - `result["special"]`: special directories found at ANY depth (outermost match only, i.e. don't record
