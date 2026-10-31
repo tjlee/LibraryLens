@@ -146,6 +146,7 @@ def default_roots() -> list[dict]:
     """
     out: list[dict] = []
     seen_real: set = set()
+    home_dev = _dev(os.path.expanduser("~"))
     for label, template, category in _CANDIDATES:
         path = _expand(template)
         if not os.path.exists(path):
@@ -154,6 +155,10 @@ def default_roots() -> list[dict]:
         if real in seen_real:
             continue
         seen_real.add(real)
+        if os.path.islink(path) and os.path.isdir(real) and _dev(real) == home_dev:
+            # e.g. ~/.gradle -> ~/dev/gradle-home: the walker never follows symlinks, and the root
+            # that contains the target excludes it, so scan the target itself or nobody counts it.
+            path = real
         out.append({"label": label, "path": path, "category": category, "exclude": []})
     for r in out:
         if r["label"] not in _EXCLUDE_INNER:
@@ -163,6 +168,13 @@ def default_roots() -> list[dict]:
                   if o is not r and _is_within(os.path.realpath(o["path"]), real)]
         r["exclude"] = _outermost(inside)
     return out
+
+
+def _dev(path: str) -> Optional[int]:
+    try:
+        return os.stat(path).st_dev
+    except OSError:
+        return None
 
 
 def _excludes(excl_reals: List[str], real: str) -> bool:
