@@ -138,12 +138,14 @@ class Stubs:
         self.action_gate = threading.Event()
         self.action_gate.set()
         self.action_result = {"ok": True, "error": None, "freed": 3000, "details": {"deleted": 2}}
+        self.running_now = {}       # app name -> running, applied by the resolver stub (as ps would)
         self.walk_s = 0.0           # how long each rescanned root's walk takes (its duration_s)
         self.ignore_cancel = False  # True: like the pipeline phases after the walk, which never check it
         self.scanner = types.SimpleNamespace(find_node=fake_find_node, save_cache=self.saved.append,
                                              load_cache=lambda: None, Cancelled=Cancelled)
         self.pipeline = types.SimpleNamespace(run=self.pipeline_run, reannotate=self.reannotate)
         self.insights = types.SimpleNamespace(annotate=fake_insights_annotate)
+        self.resolver = types.SimpleNamespace(annotate=self.resolver_annotate)
         self.trash = types.SimpleNamespace(move_to_trash=self.move_to_trash, reveal_in_finder=lambda p: None)
         self.actions = types.SimpleNamespace(run=self.actions_run)
         self.disk = types.SimpleNamespace(overview=self.overview)
@@ -170,6 +172,15 @@ class Stubs:
         self.saved.append(r)
         return r
 
+    def resolver_annotate(self, r):
+        # fresh `running` flags, and the in_use that insights derives from them for these fixtures
+        for root in r["roots"]:
+            for n in _walk(root):
+                a = n.get("app")
+                if a and a.get("name") in self.running_now:
+                    n["app"] = dict(a, running=self.running_now[a["name"]])
+                    n["in_use"] = self.running_now[a["name"]]
+
     def reannotate(self, r):
         self.reannotated += 1
         fake_insights_annotate(r)
@@ -195,7 +206,7 @@ class Stubs:
         return {"ok": True, "error": None, "method": "finder", "trashed_to": "/Users/fake-ll/.Trash/x"}
 
     def modules(self):
-        return {"scanner": self.scanner, "pipeline": self.pipeline, "insights": self.insights,
+        return {"scanner": self.scanner, "pipeline": self.pipeline, "insights": self.insights, "resolver": self.resolver,
                 "trash": self.trash, "actions": self.actions, "disk": self.disk}
 
 
@@ -372,6 +383,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("running", j["error"])
         self.assertEqual(self.stubs.trashed, [])
+
+    def test_trash_rechecks_running_apps_at_trash_time(self):
+        # the scan (maybe loaded from the cache days ago) is not the truth about what runs now
+        tool = L + "/Caches/com.example.tool"
+        self.find(tool, "Caches")["app"] = {"name": "Slack", "running": False}
+        self.stubs.running_now = {"Slack": True}  # started since the scan
+        status, j = self.jreq("POST", "/api/trash", {"path": tool})
+        self.assertEqual(status, 409, j)
+        self.assertIn("Slack is running", j["error"])
+        self.stubs.running_now = {"IntelliJ IDEA": False}  # quit since the scan
+        status, j = self.jreq("POST", "/api/trash", {"path": L + "/Caches/JetBrains/IntelliJIdea2027.1"})
+        self.assertEqual(status, 200, j)
+        self.assertEqual([t[0] for t in self.stubs.trashed], [L + "/Caches/JetBrains/IntelliJIdea2027.1"])
 
     def test_trash_running_descendant_with_inherited_app_refused(self):
         # the running node has no "app" of its own; that must not read as "nothing is running"

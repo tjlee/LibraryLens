@@ -487,6 +487,16 @@ class App:
                 return True
         return False
 
+    def _refresh_running(self, r: dict) -> None:
+        """Re-check which apps run right now (``in_use`` comes from the scan, which may be days old, e.g.
+        loaded from the cache at startup): fresh ``running`` flags, then insights recomputes ``in_use``."""
+        try:
+            self.mod("resolver").annotate(r)
+            self.mod("insights").annotate(r)
+            self.version += 1
+        except Exception as e:  # keep the scan-time state; the checks below still apply
+            print("librarylens: could not re-check running apps: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+
     def _reannotate(self, r: dict) -> Optional[str]:
         """pipeline.reannotate (apps + detectors + insights + save); falls back to insights + save."""
         try:
@@ -522,6 +532,7 @@ class App:
                     raise ApiError(HTTPStatus.FORBIDDEN, "refusing to trash a scan root; open it and trash its contents")
                 if not any(_inside_or_equal(path, rp) for rp in root_paths):
                     raise ApiError(HTTPStatus.FORBIDDEN, "path is outside the scanned locations")
+                self._refresh_running(r)
                 node = scanner.find_node(r, path)
                 entry = None
                 if node is None or node.get("synthetic") or node.get("link_root"):

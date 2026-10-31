@@ -50,7 +50,7 @@ Key cross-module ideas:
 - **Partial rescans**: `scan_all(only=[labels], prev=result)` rescans those roots and copies the rest from `prev`. `cancel` (a `threading.Event`) raises `scanner.Cancelled`.
 - **App attribution** (`resolver.py`) works in a fixed order: JetBrains versioned folders, then `known_apps.json` entries (fnmatch globs, `descend`, install checks), then container plists, then bundle IDs, then name matching. Add new tools or caches to `known_apps.json` rather than to code.
 - **Safety rules** live in the tables at the top of `insights.py`. A detector `kind` is inherited down the tree, and the nearest one wins.
-- **Destructive operations re-validate everything at run time.** UI and descriptors are only advisory. `trash.validate` refuses `/`, `~`, `~/Library`, the Trash, scan roots themselves, anything outside the allowed roots, and anything containing `.git` or inside a bare repo (path checks are case-insensitive, like APFS). `actions.run` allows only `git_delete_temp_packs`, `git_worktree_prune` and `git_gc`. Both append JSON lines to `~/.librarylens/actions.log`.
+- **Destructive operations re-validate everything at run time.** UI and descriptors are only advisory. `trash.validate` refuses `/`, `~`, `~/Library`, the Trash, scan roots themselves, anything outside the allowed roots, and anything containing `.git` or inside a bare repo (path checks are case-insensitive, like APFS). The server re-checks which apps are running right before a trash (`resolver` + `insights` on the live result), since `in_use` from the scan may be days old. `actions.run` allows only `git_delete_temp_packs`, `git_worktree_prune` and `git_gc`. Both append JSON lines to `~/.librarylens/actions.log`.
 
 ## Server / UI
 
