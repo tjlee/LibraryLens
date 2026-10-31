@@ -287,8 +287,11 @@ class AnnotateTest(unittest.TestCase):
         self.assertEqual(s["total"], b["total"])
         self.assertEqual(s["by_category"]["cache"], b["by_category"]["cache"])
         self.assertEqual(sum(s["by_category"].values()), s["total"])
-        self.assertEqual(s["reclaimable"], b["reclaimable"] + int(1.6 * GB))
-        self.assertEqual([c["path"] for c in s["top_candidates"]].count(f"{C}/Homebrew"), 1)
+        # a scan root can't be moved to the Trash, so its stale content is suggested instead, once
+        self.assertEqual(s["reclaimable"], b["reclaimable"] + int(1.5 * GB))
+        paths = [c["path"] for c in s["top_candidates"]]
+        self.assertNotIn(f"{C}/Homebrew", paths)
+        self.assertEqual(paths.count(f"{C}/Homebrew/downloads"), 1)
 
     def test_orphaned_docker_container_counted_once(self) -> None:
         r = make_result()
@@ -653,6 +656,20 @@ class InsightsV2Test(unittest.TestCase):
         self.assertEqual(g["safety"], "safe")
         self.assertIn(f"{C}/somecache", self.trash)  # stale cache, contains a repo clone
         self.assertNotIn(f"{C}/somecache/repo/.git", [a["path"] for a in self.acts])
+
+    def test_git_dir_in_cache_is_never_a_trash_candidate(self) -> None:
+        # Move to Trash refuses git internals, even where they are rated as plain cache: a stale Cargo
+        # bare repo next to a fresh one must not be suggested (nor counted as reclaimable)
+        db = f"{H}/.cargo/git/db"
+        r = {"roots": [root("Cargo", "dev_cache", n(f"{H}/.cargo", 3 * G, children=[n(db, 3 * G, children=[
+            n(f"{db}/foo-123", 2 * G, mtime=OLD, kind="git_dir", details={"repo": "foo", "bare": True},
+              children=[n(f"{db}/foo-123/objects", 2 * G, mtime=OLD)]),
+            n(f"{db}/bar-456", 1 * G, kind="git_dir", details={"repo": "bar", "bare": True}),
+        ])]))]}
+        insights.annotate(r, stale_days=90, now=NOW)
+        self.assertEqual(find(r, f"{db}/foo-123")["safety"], "safe")  # still rated as cache
+        self.assertEqual(r["summary"]["top_candidates"], [])
+        self.assertEqual(r["summary"]["trash_reclaimable"], 0)
 
     def test_applications_and_system(self) -> None:
         slack = self.f("/Applications/Slack.app")

@@ -790,6 +790,9 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
     # takes the nested root's category so both views annotate it the same way.
     nested = {_path_key(r["path"]): (r.get("category") or "other", r.get("name") or "")
               for r in roots if r.get("nested_in") and r.get("path")}
+    # Move to Trash refuses scan roots (a nested root also appears inside its parent's tree) and git
+    # internals, also where the git dir is rated as plain cache (Cargo git db): never suggest those.
+    root_keys = {_path_key(r["path"]) for r in roots if r.get("path")}
 
     candidates: List[Node] = []
     flagged: Dict[str, List[Node]] = {f: [] for f in FLAG_ORDER}
@@ -805,10 +808,10 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
             cat0 = "installed"
         ctx0 = _base(root.get("path")) or root.get("name") or ""
         # stack item: node, depth, effective app, category, ctx name, covered bitmask,
-        #             effective kind, node carrying it, depth-1 ancestor name
-        stack: List[tuple] = [(root, 0, None, cat0, ctx0, 0, None, None, "")]
+        #             effective kind, node carrying it, depth-1 ancestor name, inside a git dir
+        stack: List[tuple] = [(root, 0, None, cat0, ctx0, 0, None, None, "", False)]
         while stack:
-            node, depth, inherited, cat, ctx, covered, kind, knode, top = stack.pop()
+            node, depth, inherited, cat, ctx, covered, kind, knode, top, in_git = stack.pop()
             if depth == 1:
                 top = node.get("name") or ""
             if node.get("link_root"):
@@ -822,6 +825,7 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
                 if sw is not None:
                     cat, ctx = sw
             own_kind = None if node.get("synthetic") else node.get("kind")
+            in_git = in_git or own_kind in GIT_KINDS
             if own_kind:
                 kind_nodes.append(node)
                 # repos/build dirs inside caches (Cargo git db, Bazel externals) stay cache;
@@ -844,13 +848,13 @@ def annotate(result: dict, stale_days: int = 90, now: Optional[float] = None) ->
                     action_seen.add(_path_key(p))
                     if not covered & cand_bit and _path_key(p) not in action_nodes:
                         action_nodes[_path_key(p)] = (node, app)
-                if not covered & cand_bit and is_candidate(node, depth, flags, safety, kind, knode,
-                                                           cat, top):
+                if not covered & cand_bit and not in_git and _path_key(node.get("path") or "") not in root_keys \
+                        and is_candidate(node, depth, flags, safety, kind, knode, cat, top):
                     candidates.append(node)
                     eff_apps[id(node)] = app
                     covered |= cand_bit
             for child in node.get("children") or ():
-                stack.append((child, depth + 1, app, cat, ctx, covered, kind, knode, top))
+                stack.append((child, depth + 1, app, cat, ctx, covered, kind, knode, top, in_git))
 
     # git repos whose .git folder is deeper than the scanned tree
     for repo in result.get("git_repos") or []:
